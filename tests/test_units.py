@@ -1,0 +1,113 @@
+import asyncio
+import json
+import os
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "asterisk_realtime_bridge"))
+
+from app import config, g711  # noqa: E402
+from app.audiosocket import FRAME_BYTES, KIND_AUDIO, KIND_UUID, pack_frame, read_frame  # noqa: E402
+
+
+class G711Tests(unittest.TestCase):
+    def test_silence(self):
+        self.assertEqual(g711.slin_to_ulaw(b"\x00\x00"), b"\xff")
+        self.assertEqual(g711.ulaw_to_slin(b"\xff"), b"\x00\x00")
+
+    def test_roundtrip_error_is_small(self):
+        import array
+
+        samples = array.array("h", range(-32768, 32768, 37))
+        back = array.array("h")
+        back.frombytes(g711.ulaw_to_slin(g711.slin_to_ulaw(samples.tobytes())))
+        for original, decoded in zip(samples, back):
+            self.assertLessEqual(abs(original - decoded), max(40, abs(original) * 0.07))
+
+    def test_frame_sizes(self):
+        self.assertEqual(len(g711.slin_to_ulaw(bytes(FRAME_BYTES))), FRAME_BYTES // 2)
+        self.assertEqual(len(g711.ulaw_to_slin(bytes(160))), FRAME_BYTES)
+
+
+class AudioSocketTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pack_and_read(self):
+        reader = asyncio.StreamReader()
+        uuid_bytes = bytes(range(16))
+        reader.feed_data(pack_frame(KIND_UUID, uuid_bytes) + pack_frame(KIND_AUDIO, b"\x01\x02" * 160))
+        self.assertEqual(await read_frame(reader), (KIND_UUID, uuid_bytes))
+        kind, payload = await read_frame(reader)
+        self.assertEqual((kind, len(payload)), (KIND_AUDIO, 320))
+
+    async def test_truncated_stream_raises(self):
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"\x10\x01")
+        reader.feed_eof()
+        with self.assertRaises(asyncio.IncompleteReadError):
+            await read_frame(reader)
+
+
+class ConfigTests(unittest.TestCase):
+    def _load(self, options):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            json.dump(options, fh)
+        try:
+            return config.load(fh.name)
+        finally:
+            os.unlink(fh.name)
+
+    def test_requires_key(self):
+        with self.assertRaises(config.ConfigError):
+            self._load({"pin": "1234"})
+
+    def test_pin_required_by_default(self):
+        with self.assertRaises(config.ConfigError):
+            self._load({"openai_api_key": "k"})
+        with self.assertRaises(config.ConfigError):
+            self._load({"openai_api_key": "k", "pin_enabled": True, "pin": ""})
+
+    def test_pin_can_be_disabled(self):
+        cfg = self._load({"openai_api_key": "k", "pin_enabled": False})
+        self.assertEqual(cfg.pin, "")
+        # A leftover PIN in the options is ignored when the PIN is disabled.
+        cfg = self._load({"openai_api_key": "k", "pin_enabled": False, "pin": "1234"})
+        self.assertEqual(cfg.pin, "")
+        self.assertNotIn("PIN", cfg.instructions)
+
+    def test_instructions_mention_pin_only_when_enabled(self):
+        cfg = self._load({"openai_api_key": "k", "pin": "1234"})
+        self.assertIn("verify_pin", cfg.instructions)
+
+    def test_pin_must_be_digits(self):
+        with self.assertRaises(config.ConfigError):
+            self._load({"openai_api_key": "k", "pin": "12ab"})
+
+    def test_model_validation(self):
+        for ok in ("gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"):
+            self.assertEqual(self._load({"openai_api_key": "k", "pin": "1", "model": ok}).model, ok)
+        with self.assertRaises(config.ConfigError) as ctx:
+            self._load({"openai_api_key": "k", "pin": "1", "model": "gpt-live-1"})
+        self.assertIn("GPT-Live", str(ctx.exception))
+        with self.assertRaises(config.ConfigError):
+            self._load({"openai_api_key": "k", "pin": "1", "model": "gpt-4o"})
+
+    def test_fallback_agent(self):
+        cfg = self._load({"openai_api_key": "k", "pin": "1"})
+        self.assertEqual(cfg.fallback_agent, "")
+        cfg = self._load({"openai_api_key": "k", "pin": "1", "fallback_agent": "conversation.openai_conversation"})
+        self.assertEqual(cfg.fallback_agent, "conversation.openai_conversation")
+
+    def test_defaults_and_instructions(self):
+        cfg = self._load({"openai_api_key": "k", "pin": "1234", "assistant_name": "Friday", "language": "es"})
+        self.assertEqual(cfg.model, "gpt-realtime-2.1")
+        self.assertEqual(cfg.bind_address, "127.0.0.1")
+        self.assertIn("Friday", cfg.instructions)
+        self.assertIn('"es"', cfg.instructions)
+
+    def test_bind_address_is_configurable(self):
+        cfg = self._load({"openai_api_key": "k", "pin": "1", "bind_address": "0.0.0.0"})
+        self.assertEqual(cfg.bind_address, "0.0.0.0")
+
+
+if __name__ == "__main__":
+    unittest.main()

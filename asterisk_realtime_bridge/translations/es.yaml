@@ -1,0 +1,64 @@
+configuration:
+  openai_api_key:
+    name: Clave API de OpenAI
+    description: Crea una clave solo para esto, en un proyecto con límite de gasto.
+  model:
+    name: Modelo Realtime
+    description: gpt-realtime-2.1 (por defecto), gpt-realtime-2.1-mini (más barato y rápido, menos capaz) o gpt-realtime-2. GPT-Live aún no está soportado.
+  voice:
+    name: Voz
+    description: Por ejemplo marin, cedar, alloy, coral, verse...
+  language:
+    name: Idioma
+    description: Código de idioma del asistente, de los agentes de conversación de Home Assistant y de la transcripción (en, es, de...).
+  assistant_name:
+    name: Nombre del asistente
+    description: Cómo se presenta el asistente al descolgar.
+  pin_enabled:
+    name: Exigir PIN
+    description: Si lo desactivas, cualquier llamada que llegue al puente puede controlar la casa (la única barrera sería tu dialplan de Asterisk).
+  pin:
+    name: PIN de seguridad
+    description: Solo dígitos. Se puede decir en voz alta o teclear en el móvil. Obligatorio si "Exigir PIN" está activado.
+  max_pin_attempts:
+    name: Intentos de PIN
+    description: Tras estos fallos se cuelga la llamada.
+  max_call_seconds:
+    name: Duración máxima de llamada (s)
+    description: Corta la llamada pasado este tiempo para limitar el gasto.
+  max_concurrent_calls:
+    name: Llamadas simultáneas
+    description: Máximo de llamadas a la vez.
+  conversation_agent:
+    name: Agente de conversación de HA
+    description: Agente que ejecuta las órdenes. Por defecto el Assist integrado (sin LLM), que solo toca entidades expuestas.
+  fallback_agent:
+    name: Agente de respaldo (opcional)
+    description: Se usa si el agente principal no entiende la orden, por ejemplo conversation.openai_conversation. Añade latencia y coste.
+  vad:
+    name: Detección de turnos
+    description: server_vad (por silencio) o semantic_vad (por significado).
+  vad_threshold:
+    name: Umbral de voz (server_vad)
+    description: Súbelo si el asistente se interrumpe solo por ruido o eco.
+  vad_silence_ms:
+    name: Silencio para terminar turno (ms)
+    description: Cuánto silencio indica que quien llama ha terminado de hablar.
+  noise_reduction:
+    name: Reducción de ruido
+    description: near_field para llamadas de teléfono normales.
+  port:
+    name: Puerto AudioSocket
+    description: Puerto al que se conecta Asterisk.
+  bind_address:
+    name: Dirección de escucha de AudioSocket
+    description: Déjala en 127.0.0.1 si Asterisk corre en el mismo equipo. AudioSocket no tiene autenticación; si lo expones, restringe el acceso con un cortafuegos.
+  extra_instructions:
+    name: Instrucciones adicionales
+    description: Texto que se añade a las instrucciones por defecto (por ejemplo, cómo se llaman tus estancias y dispositivos).
+  log_level:
+    name: Nivel de registro
+    description: debug muestra más detalle.
+  log_transcripts:
+    name: Registrar transcripciones
+    description: Escribe en el log lo que se dice. Es información privada; actívalo solo para depurar.
