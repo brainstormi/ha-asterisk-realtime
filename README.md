@@ -2,7 +2,7 @@
 
 [![Add this add-on repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbrainstormi%2Fha-asterisk-realtime)
 
-A Home Assistant add-on that connects a phone call handled by **Asterisk** (the `AudioSocket` application) to the **OpenAI Realtime API** (speech-to-speech), so you can talk to your home over the phone and **interrupt the assistant while it is speaking**.
+A Home Assistant add-on (called an *app* since Home Assistant 2026.2; this project keeps the classic add-on naming in its files) that connects a phone call handled by **Asterisk** (the `AudioSocket` application) to the **OpenAI Realtime API** (speech-to-speech), so you can talk to your home over the phone and **interrupt the assistant while it is speaking**.
 
 ```
 Phone ──► SIP trunk ──► Asterisk ──AudioSocket (TCP)──► this add-on ──wss──► OpenAI Realtime API
@@ -49,13 +49,13 @@ Tip: if requests are often not understood, describe how your areas and devices a
 
 ## Requirements
 
-* Home Assistant OS or Supervised (this is an add-on).
+* Home Assistant OS or Supervised: this is a Supervisor add-on/app, so it is not available on Home Assistant Container or Core (if your *Settings* menu has no *Apps* entry, that is your case).
 * Asterisk 18 or newer with the AudioSocket modules loaded (`module show like audiosocket` in the Asterisk CLI). If Asterisk runs as another add-on with host networking, the default `127.0.0.1` binding just works; otherwise see `bind_address`.
 * An OpenAI API key with access to the Realtime API. **Create a key just for this**, in a project with a spending limit.
 
 ## Installation
 
-1. In Home Assistant: *Settings → Add-ons → Add-on store → ⋮ → Repositories*, and add `https://github.com/brainstormi/ha-asterisk-realtime` (or use the button at the top).
+1. In Home Assistant: *Settings → Apps → App Store → ⋮ (top right) → Repositories*, paste `https://github.com/brainstormi/ha-asterisk-realtime`, then *Add* and *Close* (or use the button at the top). On versions before 2026.2 the path is *Settings → Add-ons → Add-on store*. Note that the *Marketplace* (HACS-style) is for integrations, cards and themes, not for this.
 2. Find **Asterisk Realtime Bridge**, install it, open **Configuration**, fill in `openai_api_key` and `pin` (digits only) and start it.
 
 The log should show:
@@ -66,7 +66,7 @@ Asterisk Realtime Bridge 0.2.1 listening on 127.0.0.1:9092 (model gpt-realtime-2
 
 The image is built on your own machine from the `Dockerfile`, with no external registry involved. Reinstalling on a clean system means repeating the two steps above.
 
-**Local alternative (no GitHub):** copy the `asterisk_realtime_bridge/` folder to `/addons/` of your Home Assistant and it will show up under *Local add-ons*.
+**Local alternative (no GitHub):** copy the `asterisk_realtime_bridge/` folder to `/addons/` of your Home Assistant and it will show up under *Local apps* (*Local add-ons* before 2026.2).
 
 ### Publishing a new version
 
@@ -162,7 +162,7 @@ Once you are happy with the test, send real calls to the same three lines (`Answ
 
 ## Uninstall
 
-*Settings → Add-ons → Asterisk Realtime Bridge → Uninstall*; remove the repository from the store; remove the test contexts from your dialplan and revoke the OpenAI key.
+*Settings → Apps → Asterisk Realtime Bridge → Uninstall*; remove the repository from the store; remove the test contexts from your dialplan and revoke the OpenAI key.
 
 ## Development
 
