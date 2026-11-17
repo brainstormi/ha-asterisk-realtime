@@ -61,7 +61,7 @@ Tip: if requests are often not understood, describe how your areas and devices a
 The log should show:
 
 ```
-Asterisk Realtime Bridge 0.2.1 listening on 127.0.0.1:9092 (model gpt-realtime-2.1, PIN enabled)
+Asterisk Realtime Bridge 0.2.2 listening on 127.0.0.1:9092 (model gpt-realtime-2.1, PIN enabled)
 ```
 
 The image is built on your own machine from the `Dockerfile`, with no external registry involved. Reinstalling on a clean system means repeating the two steps above.
