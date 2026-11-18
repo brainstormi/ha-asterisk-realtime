@@ -1,6 +1,6 @@
 # Asterisk Realtime Bridge for Home Assistant
 
-A Home Assistant add-on that connects a phone call handled by **Asterisk** (the `AudioSocket` application) to the **OpenAI Realtime API** (speech-to-speech), so you can talk to your home over the phone and **interrupt the assistant while it is speaking**.
+A Home Assistant add-on (called an *app* since Home Assistant 2026.2; this project keeps the classic add-on naming in its files) that connects a phone call handled by **Asterisk** (the `AudioSocket` application) to the **OpenAI Realtime API** (speech-to-speech), so you can talk to your home over the phone and **interrupt the assistant while it is speaking**.
 
 ```
 Phone ──► SIP trunk ──► Asterisk ──AudioSocket (TCP)──► this add-on ──wss──► OpenAI Realtime API
@@ -47,7 +47,7 @@ Tip: if requests are often not understood, describe how your areas and devices a
 
 ## Requirements
 
-* Home Assistant OS or Supervised (this is an add-on).
+* Home Assistant OS or Supervised: this is a Supervisor add-on/app, so it is not available on Home Assistant Container or Core (if your *Settings* menu has no *Apps* entry, that is your case).
 * Asterisk 18 or newer with the AudioSocket modules loaded (`module show like audiosocket` in the Asterisk CLI). If Asterisk runs as another add-on with host networking, the default `127.0.0.1` binding just works; otherwise see `bind_address`.
 * An OpenAI API key with access to the Realtime API. **Create a key just for this**, in a project with a spending limit.
 
@@ -140,7 +140,7 @@ Once you are happy with the test, send real calls to the same three lines (`Answ
 
 ## Uninstall
 
-*Settings → Add-ons → Asterisk Realtime Bridge → Uninstall*; remove the repository from the store; remove the test contexts from your dialplan and revoke the OpenAI key.
+*Settings → Apps → Asterisk Realtime Bridge → Uninstall*; remove the repository from the store; remove the test contexts from your dialplan and revoke the OpenAI key.
 
 ## Status and limitations
 

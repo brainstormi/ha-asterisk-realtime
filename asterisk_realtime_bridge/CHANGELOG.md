@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.2
+- Fix: calls were dropped about 2 seconds after being answered. Asterisk's `AudioSocket()` application hangs up when it sees no activity for 2000 ms, and some carriers only start sending media after receiving some. The bridge now streams silence to Asterisk continuously from the first moment (also while connecting to OpenAI and whenever the assistant is not speaking).
+
 ## 0.2.1
 - Project made English-only and generic: code, comments, logs, default prompts, tool names (`home`, `verify_pin`, `hang_up`) and documentation. The spoken language is controlled by the `language` option. A Spanish UI translation is kept.
 - New `bind_address` option (default `127.0.0.1`) for setups where Asterisk runs on another machine; it logs a warning when it is not loopback.

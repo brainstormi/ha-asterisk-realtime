@@ -11,7 +11,7 @@ from app.audiosocket import (  # noqa: E402
     FRAME_BYTES, KIND_AUDIO, KIND_DTMF, KIND_HANGUP, pack_frame,
 )
 from app.config import Config  # noqa: E402
-from app.session import CallSession, build_session_update  # noqa: E402
+from app.session import CallSession, build_session_update, keepalive  # noqa: E402
 
 
 class FakeWS:
@@ -57,7 +57,12 @@ class FakeWriter:
         pass
 
     def audio_frames(self):
+        """All audio frames written to Asterisk (speech and silence)."""
         return [c for c in self.chunks if c[0] == KIND_AUDIO]
+
+    def speech_frames(self):
+        """Only frames carrying actual audio (not digital silence)."""
+        return [c for c in self.audio_frames() if any(c[3:])]
 
 
 class FakeHome:
@@ -122,23 +127,44 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.ws.push({"type": "response.output_audio.delta", "item_id": "item1",
                       "delta": base64.b64encode(ulaw).decode()})
         await asyncio.sleep(0.011)
-        early = len(self.writer.audio_frames())
+        early = len(self.writer.speech_frames())
         await asyncio.sleep(0.12)
-        played = len(self.writer.audio_frames())
+        played = len(self.writer.speech_frames())
         self.assertGreater(played, early)
         self.assertLess(played, 25, "audio must be paced in real time, not sent in a burst")
 
         self.ws.push({"type": "input_audio_buffer.speech_started"})
         await asyncio.sleep(0.03)
-        count = len(self.writer.audio_frames())
+        count = len(self.writer.speech_frames())
         await asyncio.sleep(0.1)
-        self.assertEqual(len(self.writer.audio_frames()), count, "no more audio after a barge-in")
+        self.assertEqual(len(self.writer.speech_frames()), count, "no more speech after a barge-in")
 
         trunc = self.ws.of_type("conversation.item.truncate")
         self.assertEqual(len(trunc), 1)
         self.assertEqual(trunc[0]["item_id"], "item1")
         self.assertGreaterEqual(trunc[0]["audio_end_ms"], 20)
         self.assertLessEqual(trunc[0]["audio_end_ms"], 25 * 20)
+
+    async def test_silence_is_sent_continuously_even_before_the_session_is_ready(self):
+        # Asterisk hangs up after 2000 ms without activity on the AudioSocket
+        # connection, so media must flow from the very first moment.
+        await asyncio.sleep(0.1)
+        frames = self.writer.audio_frames()
+        self.assertGreaterEqual(len(frames), 3)
+        self.assertEqual(self.writer.speech_frames(), [])
+        self.assertTrue(all(len(f) == 3 + FRAME_BYTES for f in frames))
+
+    async def test_keepalive_sends_silence_until_cancelled(self):
+        writer = FakeWriter()
+        task = asyncio.create_task(keepalive(writer))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        count = len(writer.audio_frames())
+        self.assertGreaterEqual(count, 3)
+        self.assertEqual(writer.speech_frames(), [])
+        await asyncio.sleep(0.05)
+        self.assertEqual(len(writer.audio_frames()), count)
 
     async def test_no_truncate_when_nothing_pending(self):
         await self.ready()

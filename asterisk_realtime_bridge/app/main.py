@@ -15,7 +15,7 @@ from . import __version__
 from .audiosocket import KIND_HANGUP, KIND_UUID, pack_frame, read_frame
 from .config import DEPRECATED_MODELS, Config, ConfigError, load
 from .ha import HomeAssistant
-from .session import CallSession
+from .session import CallSession, keepalive
 
 log = logging.getLogger("bridge")
 
@@ -50,6 +50,9 @@ class Bridge:
 
             self._active += 1
             log.info("[%s] incoming call (%s)", call_id, peer)
+            # Asterisk drops the call after 2 s without activity, so stream
+            # silence right away, while we connect to OpenAI.
+            silence = asyncio.create_task(keepalive(writer))
             try:
                 url = f"{self.cfg.realtime_url}?model={self.cfg.model}"
                 async with connect(
@@ -58,10 +61,14 @@ class Bridge:
                     open_timeout=10,
                     max_size=None,
                 ) as ws:
+                    silence.cancel()
+                    await asyncio.gather(silence, return_exceptions=True)
                     await CallSession(self.cfg, call_id, reader, writer, ws, self.home).run()
             except Exception as err:  # noqa: BLE001
                 log.error("[%s] call failed: %r", call_id, err)
             finally:
+                silence.cancel()
+                await asyncio.gather(silence, return_exceptions=True)
                 self._active -= 1
                 log.info("[%s] call ended", call_id)
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):

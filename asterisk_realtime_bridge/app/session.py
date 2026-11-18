@@ -42,6 +42,28 @@ log = logging.getLogger(__name__)
 READY_TIMEOUT_S = 10.0
 FLUSH_GRACE_S = 0.6
 
+# 20 ms of digital silence. Asterisk's AudioSocket application hangs up if it
+# sees no activity (from the channel or from the server) for 2000 ms, and some
+# carriers only start sending media once they receive some. So we must send
+# audio continuously, from the very first moment, even when the assistant is
+# not talking.
+SILENCE_FRAME = bytes(FRAME_BYTES)
+
+
+async def keepalive(writer: Any, frame_seconds: float = FRAME_MS / 1000) -> None:
+    """Send silence to Asterisk until cancelled (used while connecting to OpenAI)."""
+    loop = asyncio.get_running_loop()
+    next_tick = loop.time()
+    while True:
+        writer.write(pack_frame(KIND_AUDIO, SILENCE_FRAME))
+        await writer.drain()
+        next_tick += frame_seconds
+        delay = next_tick - loop.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        else:
+            next_tick = loop.time()
+
 
 class _WebSocket(Protocol):
     async def send(self, message: str) -> None: ...
@@ -340,7 +362,12 @@ class CallSession:
                 if next_tick < loop.time() - 0.1:  # fell behind: do not burst
                     next_tick = loop.time()
             else:
-                next_tick = loop.time() + self.frame_seconds
+                # Nothing to say: keep the media flowing with silence.
+                self.writer.write(pack_frame(KIND_AUDIO, SILENCE_FRAME))
+                await self.writer.drain()
+                next_tick += self.frame_seconds
+                if next_tick < loop.time() - 0.1:
+                    next_tick = loop.time()
 
     async def _interrupt(self) -> None:
         """The caller starts talking: go silent now and tell the model what was heard."""
