@@ -102,7 +102,75 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.model, "gpt-realtime-2.1")
         self.assertEqual(cfg.bind_address, "127.0.0.1")
         self.assertIn("Friday", cfg.instructions)
+        self.assertIn("always speak Spanish", cfg.instructions)
         self.assertIn('"es"', cfg.instructions)
+
+    def test_language_names(self):
+        self.assertEqual(config.language_name("es"), "Spanish")
+        self.assertEqual(config.language_name("es-ES"), "Spanish")
+        self.assertEqual(config.language_name("pt_BR"), "Portuguese")
+        self.assertEqual(config.language_name("xx"), "xx")  # unknown codes pass through
+
+    def test_accent_is_optional(self):
+        cfg = self._load({"openai_api_key": "k", "pin": "1"})
+        self.assertNotIn("Accent", cfg.instructions)
+        cfg = self._load({"openai_api_key": "k", "pin": "1", "language": "es",
+                          "accent": "Spanish from Spain (Castilian)"})
+        self.assertIn("Accent and dialect: Spanish from Spain (Castilian)", cfg.instructions)
+
+    # ---- configurable prompt -------------------------------------------------
+    def test_empty_prompt_uses_the_built_in_template(self):
+        cfg = self._load({"openai_api_key": "k", "pin": "1", "prompt": ""})
+        self.assertEqual(cfg.instructions, self._load({"openai_api_key": "k", "pin": "1"}).instructions)
+        self.assertIn("verify_pin", cfg.instructions)
+
+    def test_custom_prompt_uses_placeholders_from_other_options(self):
+        cfg = self._load({
+            "openai_api_key": "k", "pin": "1", "language": "es", "assistant_name": "Friday",
+            "accent": "Castilian",
+            "prompt": "Hi, I am {assistant_name}. Speak {language_name} ({language}).\n{accent_line}\n{pin_rules}\nBye.",
+        })
+        text = cfg.instructions
+        self.assertTrue(text.startswith("Hi, I am Friday. Speak Spanish (es)."))
+        self.assertIn("Accent and dialect: Castilian", text)
+        self.assertIn("verify_pin", text)
+        self.assertNotIn("{", text)
+
+    def test_block_placeholders_vanish_when_not_applicable(self):
+        cfg = self._load({
+            "openai_api_key": "k", "pin_enabled": False,
+            "prompt": "Line one.\n{accent_line}\n{pin_rules}\nLine two.",
+        })
+        self.assertEqual(cfg.instructions, "Line one.\nLine two.\n")
+
+    def test_unknown_placeholders_and_braces_are_kept(self):
+        cfg = self._load({"openai_api_key": "k", "pin": "1", "prompt": 'Use {unknown} and {"a": 1}.'})
+        self.assertEqual(cfg.instructions, 'Use {unknown} and {"a": 1}.\n')
+
+    def test_literal_backslash_n_becomes_a_newline(self):
+        # The options form can be a single-line field.
+        cfg = self._load({"openai_api_key": "k", "pin": "1", "prompt": "One.\\nTwo."})
+        self.assertEqual(cfg.instructions, "One.\nTwo.\n")
+
+    def test_extra_instructions_are_appended_after_the_prompt(self):
+        cfg = self._load({"openai_api_key": "k", "pin": "1", "prompt": "Main.", "extra_instructions": "Extra."})
+        self.assertEqual(cfg.instructions, "Main.\n\nAdditional instructions:\nExtra.\n")
+
+    def test_manifest_default_prompt_matches_the_built_in_template(self):
+        """The template pre-filled in config.yaml must not drift from the code."""
+        path = os.path.join(os.path.dirname(__file__), "..", "asterisk_realtime_bridge", "config.yaml")
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        start = lines.index("  prompt: |") + 1
+        block = []
+        for line in lines[start:]:
+            if line.startswith("    "):
+                block.append(line[4:])
+            elif line == "":
+                block.append("")
+            else:
+                break
+        self.assertEqual("\n".join(block).rstrip("\n"), config.DEFAULT_PROMPT.rstrip("\n"))
 
     def test_bind_address_is_configurable(self):
         cfg = self._load({"openai_api_key": "k", "pin": "1", "bind_address": "0.0.0.0"})

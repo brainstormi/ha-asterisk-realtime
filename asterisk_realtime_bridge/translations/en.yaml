@@ -14,6 +14,12 @@ configuration:
   assistant_name:
     name: Assistant name
     description: How the assistant introduces itself.
+  accent:
+    name: Accent and dialect (optional)
+    description: Steers the voice, e.g. "Spanish from Spain (Castilian), standard peninsular accent". The result depends on the model and voice; try different voices too.
+  prompt:
+    name: Assistant prompt (template)
+    description: "How the assistant introduces itself and behaves. Placeholders: {assistant_name}, {language}, {language_name}, {accent_line} and {pin_rules} (the last two on a line of their own). Leave it empty to use the built-in template. Multi-line editing is easier with Edit in YAML; a literal \\n also works as a line break."
   pin_enabled:
     name: Require PIN
     description: If disabled, any call reaching the bridge can control the home (your Asterisk dialplan would be the only barrier).

@@ -14,6 +14,12 @@ configuration:
   assistant_name:
     name: Nombre del asistente
     description: Cómo se presenta el asistente al descolgar.
+  accent:
+    name: Acento y dialecto (opcional)
+    description: Orienta la voz, p. ej. "español de España (castellano), acento peninsular estándar". El resultado depende del modelo y de la voz; prueba también otras voces.
+  prompt:
+    name: Prompt del asistente (plantilla)
+    description: "Cómo se presenta y se comporta el asistente. Marcadores: {assistant_name}, {language}, {language_name}, {accent_line} y {pin_rules} (estos dos en una línea propia). Déjalo vacío para usar la plantilla incorporada. Para varias líneas es más cómodo Editar en YAML; un \\n literal también sirve como salto de línea."
   pin_enabled:
     name: Exigir PIN
     description: Si lo desactivas, cualquier llamada que llegue al puente puede controlar la casa (la única barrera sería tu dialplan de Asterisk).

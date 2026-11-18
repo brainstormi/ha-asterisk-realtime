@@ -47,6 +47,56 @@ Tip: if requests are often not understood, describe how your areas and devices a
 
 `language` (default `en`) controls the language the assistant speaks and the language used for Home Assistant conversation agents and transcription. The default prompts are in English and tell the model to speak the configured language (any ISO code, e.g. `es`, `de`, `fr`).
 
+### Prompt
+
+The prompt that makes the assistant introduce itself and behave is the `prompt` option, pre-filled with a template you can edit. Values that already have their own option are **not** repeated in it; they are filled in through placeholders:
+
+| Placeholder | Replaced by |
+|---|---|
+| `{assistant_name}` | the `assistant_name` option |
+| `{language}` / `{language_name}` | the `language` option, as a code (`es`) and as a name (`Spanish`) |
+| `{accent_line}` | the `accent` option as a line of text; the line is dropped when `accent` is empty (keep it on a line of its own) |
+| `{pin_rules}` | the PIN instructions; dropped when `pin_enabled` is off (keep it on a line of its own) |
+
+Anything else in braces is left untouched. Notes:
+
+* **Empty = built-in template.** If you clear the field, the version shipped with the add-on is used, including any future improvements. If you keep your own copy, it will not change when the add-on is updated.
+* **Multi-line editing.** The options form may show the field as a single line. For comfortable editing use the three-dot menu → *Edit in YAML*; a literal `\n` is also accepted as a line break.
+* **Tools.** The assistant has the tools `home`, `hang_up` and, with the PIN enabled, `verify_pin`. If you rewrite the prompt, mention them by name.
+* **The PIN is enforced in code**, not by the prompt: even if you remove `{pin_rules}`, the `home` tool is rejected until the PIN is verified.
+* `extra_instructions` is still appended after the prompt, for short additions.
+
+The current default template, for reference:
+
+```
+You are {assistant_name}, the voice assistant of this home. You are speaking on the phone, so keep your replies short and natural: no lists, no long explanations.
+
+Language: always speak {language_name} (language code "{language}"), starting with your very first words, unless the caller clearly speaks another language.
+{accent_line}
+
+Security:
+{pin_rules}
+- For locks, alarms, doors, gates and garage doors always ask for explicit confirmation ("do you really want me to open it?") before acting.
+
+Home:
+- For any action or question about the home, use the home tool with ONE clear request in natural language, for example "turn on the living room light" or "is the garage door open?". Write the request in {language_name} (language code "{language}"), because that is the language Home Assistant understands.
+- Tell the caller the result in your own words. If the tool returns an error, say so honestly. Never invent states or actions.
+
+Call:
+- If the caller says goodbye or needs nothing else, say a brief goodbye and call the hang_up tool.
+- If you are interrupted, stop talking and listen.
+```
+
+### Accent and voice
+
+The Realtime voices are a fixed list (`marin`, `cedar`, `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`) and the accent is not a parameter. The `accent` option appends a line to the instructions to steer it, for example:
+
+```
+Spanish as spoken in Spain (Castilian), standard peninsular accent: pronounce "c" before e/i and "z" as in Spain, use "vosotros" and Spain vocabulary (ordenador, móvil, vale). Avoid Latin American accent and vocabulary.
+```
+
+The model follows this to a degree, and the result depends on the model and the voice, so try a few voices. If the accent matters more than speech-to-speech speed, a classic speech-to-text → LLM → text-to-speech pipeline lets you pick a regional TTS voice, at the cost of latency and barge-in.
+
 ## Requirements
 
 * Home Assistant OS or Supervised: this is a Supervisor add-on/app, so it is not available on Home Assistant Container or Core (if your *Settings* menu has no *Apps* entry, that is your case).
@@ -61,7 +111,7 @@ Tip: if requests are often not understood, describe how your areas and devices a
 The log should show:
 
 ```
-Asterisk Realtime Bridge 0.2.2 listening on 127.0.0.1:9092 (model gpt-realtime-2.1, PIN enabled)
+Asterisk Realtime Bridge 0.2.5 listening on 127.0.0.1:9092 (model gpt-realtime-2.1, PIN enabled)
 ```
 
 The image is built on your own machine from the `Dockerfile`, with no external registry involved. Reinstalling on a clean system means repeating the two steps above.
@@ -129,6 +179,8 @@ Once you are happy with the test, send real calls to the same three lines (`Answ
 | `voice` | `marin` | Assistant voice |
 | `language` | `en` | Spoken language and Home Assistant request language |
 | `assistant_name` | `Assistant` | How the assistant introduces itself |
+| `accent` | – | Optional accent/dialect hint (see above) |
+| `prompt` | template | Assistant prompt with placeholders (see above); empty = built-in |
 | `pin_enabled` / `pin` | `true` / – | Require a PIN and its value |
 | `max_pin_attempts` | `3` | Failed PIN attempts before hanging up |
 | `conversation_agent` | `conversation.home_assistant` | Agent that executes requests |
@@ -138,7 +190,7 @@ Once you are happy with the test, send real calls to the same three lines (`Answ
 | `vad`, `vad_threshold`, `vad_silence_ms` | `server_vad`, `0.5`, `500` | Turn detection |
 | `noise_reduction` | `near_field` | `near_field`, `far_field` or `off` |
 | `port` / `bind_address` | `9092` / `127.0.0.1` | Where AudioSocket listens |
-| `extra_instructions` | – | Appended to the default assistant instructions |
+| `extra_instructions` | – | Appended after the prompt |
 | `log_transcripts` | `false` | Log what is said (private; for debugging only) |
 
 ## Security

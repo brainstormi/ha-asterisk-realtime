@@ -7,42 +7,95 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-_INTRO = """\
-You are {name}, the voice assistant of this home. You are speaking on the \
-phone, so keep your replies short and natural: no lists, no long explanations.
+# Default prompt template. It is also pre-filled in the add-on options, so it can
+# be edited there; an empty option falls back to this built-in version.
+#
+# Placeholders (anything else in braces is left untouched):
+#   {assistant_name}  the `assistant_name` option
+#   {language}        the `language` option (code, e.g. "es")
+#   {language_name}   the language name (e.g. "Spanish")
+#   {accent_line}     the `accent` option as a line; dropped when empty
+#                     (use it on a line of its own)
+#   {pin_rules}       the PIN instructions; dropped when the PIN is disabled
+#                     (use it on a line of its own)
+DEFAULT_PROMPT = """\
+You are {assistant_name}, the voice assistant of this home. You are speaking on the phone, so keep your replies short and natural: no lists, no long explanations.
 
-Language: speak the language with ISO code "{language}" (for example "es" is \
-Spanish and "en" is English), unless the caller clearly speaks another one.
+Language: always speak {language_name} (language code "{language}"), starting with your very first words, unless the caller clearly speaks another language.
+{accent_line}
 
 Security:
-"""
+{pin_rules}
+- For locks, alarms, doors, gates and garage doors always ask for explicit confirmation ("do you really want me to open it?") before acting.
 
-_PIN_RULES = """\
-- Before doing anything else, the caller must verify their PIN. Ask for it at \
-the start and use the verify_pin tool with the digits they say. Until the PIN \
-is correct, do nothing else and reveal nothing about the home.
-- If the PIN is wrong, say so and ask again. Never reveal or hint at the PIN.
-"""
-
-_CONFIRM_RULE = """\
-- For locks, alarms, doors, gates and garage doors always ask for explicit \
-confirmation ("do you really want me to open it?") before acting.
-"""
-
-_REST = """
 Home:
-- For any action or question about the home, use the home tool with ONE clear \
-request in natural language, for example "turn on the living room light" or \
-"is the garage door open?". Write the request in the language with ISO code \
-"{language}", because that is the language Home Assistant understands.
-- Tell the caller the result in your own words. If the tool returns an error, \
-say so honestly. Never invent states or actions.
+- For any action or question about the home, use the home tool with ONE clear request in natural language, for example "turn on the living room light" or "is the garage door open?". Write the request in {language_name} (language code "{language}"), because that is the language Home Assistant understands.
+- Tell the caller the result in your own words. If the tool returns an error, say so honestly. Never invent states or actions.
 
 Call:
-- If the caller says goodbye or needs nothing else, say a brief goodbye and \
-call the hang_up tool.
+- If the caller says goodbye or needs nothing else, say a brief goodbye and call the hang_up tool.
 - If you are interrupted, stop talking and listen.
 """
+
+PIN_RULES = (
+    "- Before doing anything else, the caller must verify their PIN. Ask for it at "
+    "the start and use the verify_pin tool with the digits they say. Until the PIN "
+    "is correct, do nothing else and reveal nothing about the home.\n"
+    "- If the PIN is wrong, say so and ask again. Never reveal or hint at the PIN."
+)
+
+_LANGUAGE_NAMES = {
+    "ar": "Arabic", "ca": "Catalan", "cs": "Czech", "da": "Danish", "de": "German",
+    "el": "Greek", "en": "English", "es": "Spanish", "eu": "Basque", "fi": "Finnish",
+    "fr": "French", "gl": "Galician", "he": "Hebrew", "hi": "Hindi", "hu": "Hungarian",
+    "it": "Italian", "ja": "Japanese", "ko": "Korean", "nl": "Dutch", "no": "Norwegian",
+    "nb": "Norwegian", "pl": "Polish", "pt": "Portuguese", "ro": "Romanian",
+    "ru": "Russian", "sv": "Swedish", "tr": "Turkish", "uk": "Ukrainian",
+    "zh": "Chinese",
+}
+
+
+def language_name(code: str) -> str:
+    """Human-readable language name for an ISO code such as "es" or "es-ES"."""
+    base = code.strip().lower().replace("_", "-").split("-")[0]
+    return _LANGUAGE_NAMES.get(base, code)
+
+
+def render_prompt(
+    template: str,
+    *,
+    assistant_name: str,
+    language: str,
+    accent: str,
+    pin_enabled: bool,
+) -> str:
+    """Fill the placeholders of a prompt template.
+
+    Block placeholders (``{pin_rules}``, ``{accent_line}``) sitting alone on a
+    line are replaced by their text, or the whole line is dropped when empty.
+    Unknown placeholders and any other braces are left as they are.
+    """
+    values = {
+        "assistant_name": assistant_name,
+        "language": language,
+        "language_name": language_name(language),
+    }
+    blocks = {
+        "pin_rules": PIN_RULES if pin_enabled else "",
+        "accent_line": f"Accent and dialect: {accent}" if accent else "",
+    }
+    lines: list[str] = []
+    for line in template.splitlines():
+        stripped = line.strip()
+        if stripped in ("{pin_rules}", "{accent_line}"):
+            if blocks[stripped[1:-1]]:
+                lines.append(blocks[stripped[1:-1]])
+            continue
+        for key, value in {**values, **blocks}.items():
+            line = line.replace("{" + key + "}", value)
+        lines.append(line)
+    return "\n".join(lines).strip() + "\n"
+
 
 # Retired by OpenAI on 2027-01-20.
 DEPRECATED_MODELS = {"gpt-realtime", "gpt-realtime-mini"}
@@ -61,6 +114,8 @@ class Config:
     voice: str = "marin"
     language: str = "en"
     assistant_name: str = "Assistant"
+    accent: str = ""
+    prompt: str = ""
     extra_instructions: str = ""
     pin_enabled: bool = True
     pin: str = ""
@@ -86,13 +141,20 @@ class Config:
     ha_token: str = ""
 
     @property
+    def language_name(self) -> str:
+        return language_name(self.language)
+
+    @property
     def instructions(self) -> str:
-        text = _INTRO.format(name=self.assistant_name, language=self.language)
-        if self.pin:
-            text += _PIN_RULES
-        text += _CONFIRM_RULE + _REST.format(language=self.language)
+        text = render_prompt(
+            self.prompt.strip() or DEFAULT_PROMPT,
+            assistant_name=self.assistant_name,
+            language=self.language,
+            accent=self.accent,
+            pin_enabled=bool(self.pin),
+        )
         if self.extra_instructions.strip():
-            text += "\nAdditional instructions:\n" + self.extra_instructions.strip()
+            text += "\nAdditional instructions:\n" + self.extra_instructions.strip() + "\n"
         return text
 
 
@@ -164,6 +226,9 @@ def load(path: str | None = None) -> Config:
         voice=text("voice", defaults.voice),
         language=text("language", defaults.language),
         assistant_name=text("assistant_name", defaults.assistant_name),
+        accent=text("accent", ""),
+        # The options form may be a single-line field: accept a literal \n too.
+        prompt=text("prompt", "").replace("\\n", "\n"),
         extra_instructions=text("extra_instructions", ""),
         pin_enabled=pin_enabled,
         pin=pin,
