@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.5
+- Added `icon.png` and `logo.png` for the add-on.
+
+## 0.2.4
+- The assistant prompt is now configurable (`prompt` option), pre-filled with the default template. Placeholders pull the assistant name, language and accent from their own options (`{assistant_name}`, `{language}`, `{language_name}`, `{accent_line}`) and the PIN rules from `pin_enabled` (`{pin_rules}`). An empty value uses the built-in template. `extra_instructions` is still appended after it.
+
+## 0.2.3
+- Fix: the assistant greeted in English until the caller spoke. The greeting instruction was in English and did not name a language. It now states the configured language explicitly, and the instructions use the language name ("Spanish") instead of only the ISO code.
+- New optional `accent` setting to steer the accent/dialect (e.g. Castilian Spanish).
+
 ## 0.2.2
 - Fix: calls were dropped about 2 seconds after being answered. Asterisk's `AudioSocket()` application hangs up when it sees no activity for 2000 ms, and some carriers only start sending media after receiving some. The bridge now streams silence to Asterisk continuously from the first moment (also while connecting to OpenAI and whenever the assistant is not speaking).
 

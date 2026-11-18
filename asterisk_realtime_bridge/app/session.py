@@ -311,10 +311,13 @@ class CallSession:
                 log.info("[%s] assistant: %s", self.call_id, event.get("transcript", "").strip())
 
     async def _greet(self) -> None:
+        # State the language explicitly: the model tends to answer in the
+        # language of the instruction it is given, which would be English.
+        lang = self.cfg.language_name
         if self.cfg.pin:
-            hint = "Greet the caller in one short sentence and ask for the security PIN."
+            hint = f"Greet the caller in {lang}, in one short sentence, and ask for the security PIN."
         else:
-            hint = "Greet the caller in one short sentence and ask how you can help."
+            hint = f"Greet the caller in {lang}, in one short sentence, and ask how you can help."
         await self._send({"type": "response.create", "response": {"instructions": hint}})
 
     async def _on_response_done(self, response: dict[str, Any]) -> None:

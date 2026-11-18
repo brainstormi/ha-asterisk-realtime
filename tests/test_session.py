@@ -99,6 +99,21 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.ws.push({"type": "session.updated"})
         await asyncio.sleep(0.02)
 
+    async def test_greeting_states_the_configured_language(self):
+        cfg = Config(openai_api_key="k", pin="1234", language="es", max_call_seconds=5)
+        ws = FakeWS()
+        task = asyncio.create_task(
+            CallSession(cfg, "lang", asyncio.StreamReader(), FakeWriter(), ws, FakeHome()).run()
+        )
+        await asyncio.sleep(0.01)
+        ws.push({"type": "session.updated"})
+        await asyncio.sleep(0.02)
+        hint = ws.of_type("response.create")[0]["response"]["instructions"]
+        self.assertIn("Spanish", hint)
+        self.assertIn("PIN", hint)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
     async def test_session_update_shape(self):
         update = self.ws.sent[0]["session"]
         self.assertEqual(update["type"], "realtime")
