@@ -20,6 +20,7 @@ import asyncio
 import base64
 import collections
 import hmac
+import re
 import json
 import logging
 from typing import Any, Protocol
@@ -108,8 +109,10 @@ def build_tools(cfg: Config) -> list[dict[str, Any]]:
                 "type": "function",
                 "name": "verify_pin",
                 "description": (
-                    "Check the security PIN spoken by the caller. Pass only "
-                    "the digits, without spaces."
+                    "Check the security PIN spoken by the caller. Pass ONLY the "
+                    "digits one by one as a string of numerals (for example "
+                    "'123456'); never words, never grouped as a number like "
+                    "'one hundred twenty-three thousand'."
                 ),
                 "parameters": {
                     "type": "object",
@@ -163,6 +166,25 @@ def build_session_update(cfg: Config) -> dict[str, Any]:
             "tool_choice": "auto",
         },
     }
+
+
+_DIGIT_WORDS = {
+    "cero": "0", "uno": "1", "una": "1", "dos": "2", "tres": "3", "cuatro": "4",
+    "cinco": "5", "seis": "6", "siete": "7", "ocho": "8", "nueve": "9",
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9",
+}
+
+
+def _extract_digits(text: str) -> str:
+    """Digits in ``text``; spelled-out digit words ("ocho", "one") count too."""
+    out = []
+    for token in re.findall(r"[^\W_]+", text.lower()):
+        if token.isdigit():
+            out.append(token)
+        elif token in _DIGIT_WORDS:
+            out.append(_DIGIT_WORDS[token])
+    return "".join(out)
 
 
 class CallSession:
@@ -446,7 +468,12 @@ class CallSession:
 
     # --------------------------------------------------------------- PIN
     def _check_pin(self, candidate: str) -> dict[str, Any]:
-        digits = "".join(ch for ch in candidate if ch.isdigit())
+        digits = _extract_digits(candidate)
+        log.debug(
+            "[%s] PIN candidate: %d digits (expected %d), %d matching positions",
+            self.call_id, len(digits), len(self.cfg.pin),
+            sum(a == b for a, b in zip(digits, self.cfg.pin)),
+        )
         if self._authed:
             return {"ok": True, "message": "The PIN was already verified."}
         if digits and hmac.compare_digest(digits, self.cfg.pin):

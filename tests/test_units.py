@@ -179,3 +179,11 @@ class ConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_extract_digits_handles_words_and_numerals():
+    from app.session import _extract_digits
+
+    assert _extract_digits("561 342") == "561342"
+    assert _extract_digits("cinco seis uno, 3 4 2") == "561342"
+    assert _extract_digits("five six one") == "561"

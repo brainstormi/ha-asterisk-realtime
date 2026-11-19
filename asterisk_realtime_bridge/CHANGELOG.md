@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.6
+- Fix: spoken PINs were rejected when the model passed them as words or grouped numbers. The `verify_pin` tool now asks for individual numerals, and spelled-out digit words (English/Spanish) are accepted.
+- With `log_level: debug`, PIN checks log the digit count and number of matching positions (never the PIN itself).
+
 ## 0.2.5
 - Added `icon.png` and `logo.png` for the add-on.
 
