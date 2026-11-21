@@ -68,20 +68,20 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_command_registers_an_outbound_call(self):
         await self.bridge.on_command({"action": "outbound", "call_id": CALL_ID, "message": "Alarm",
-                                      "profile": "soloconsulta"})
+                                      "profile": "QueryOnly"})
         self.assertEqual(len(self.bridge.registry), 1)
         self.assertEqual(self.events, [])
 
     async def test_invalid_command_is_reported_as_failed(self):
         await self.bridge.on_command({"action": "outbound", "call_id": CALL_ID, "message": "",
-                                      "profile": "soloconsulta"})
+                                      "profile": "QueryOnly"})
         self.assertEqual(len(self.bridge.registry), 0)
         event_type, data = self.events[0]
         self.assertEqual(event_type, "asterisk_realtime_bridge_call")
         self.assertEqual((data["call_id"], data["stage"], data["result"]), (CALL_ID, "ended", "failed"))
 
     async def test_answered_outbound_call_reports_answered_then_failed_when_openai_is_down(self):
-        self.bridge.registry.add(OutboundCall(CALL_ID, "Alarm", "gestion", person="Sonia"))
+        self.bridge.registry.add(OutboundCall(CALL_ID, "Alarm", "Management", person="Sonia"))
         await self.connect(CALL_ID)
         stages = [(d["stage"], d.get("result")) for _, d in self.events]
         self.assertEqual(stages, [("answered", None), ("ended", "failed")])
@@ -94,9 +94,10 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         await self.connect(str(uuid.uuid4()))
         self.assertEqual(len(self.events), 1)
         self.assertEqual(self.events[0][1]["direction"], "inbound")
+        self.assertEqual(self.events[0][1]["profile"], "InboundCall")
 
     async def test_missed_outbound_call_reports_no_answer(self):
-        call = OutboundCall(CALL_ID, "Alarm", "gestion")
+        call = OutboundCall(CALL_ID, "Alarm", "Management")
         call.timeout = 0.05
         self.bridge.registry.add(call)
         await asyncio.sleep(0.12)
@@ -105,13 +106,15 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     def test_result_values(self):
         class S:
-            connected, confirmed, pin_person = True, False, None
+            connected, confirmed, confirmed_by, pin_person = True, False, None, None
 
         session = S()
         self.assertEqual(self.bridge._ended(CALL_ID, None, session, 3.2)["result"], "answered")
-        session.confirmed, session.pin_person = True, "Raul"
+        session.confirmed, session.confirmed_by, session.pin_person = True, "dtmf", "Raul"
         data = self.bridge._ended(CALL_ID, None, session, 3.2)
-        self.assertEqual((data["result"], data["pin_person"], data["duration"]), ("confirmed", "Raul", 3))
+        self.assertEqual((data["result"], data["confirmed_by"], data["pin_person"], data["duration"]),
+                         ("confirmed", "dtmf", "Raul", 3))
+        self.assertEqual(data["profile"], "InboundCall")
         self.assertEqual(self.bridge._ended(CALL_ID, None, None, 0)["result"], "failed")
 
 

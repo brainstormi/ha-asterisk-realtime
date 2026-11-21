@@ -13,9 +13,17 @@ Flow
 
 Profiles
 --------
-* ``soloconsulta``: questions only (read-only agent); changes are impossible,
+* ``QueryOnly``: questions only (read-only agent); changes are impossible,
   there is no PIN.
-* ``gestion``: questions right away; changes after a valid PIN.
+* ``Management``: questions right away; changes after a valid PIN (the global
+  PIN or the personal PIN of the person called).
+
+Confirmation
+------------
+The caller (an automation, the alarm) chooses per call what counts as the person
+confirming the notice: ``implicit`` (they react to it), ``voice`` (an explicit
+yes), ``dtmf`` (a key) or ``voice_or_dtmf``. The bridge only applies that rule
+and reports how it was confirmed.
 """
 
 from __future__ import annotations
@@ -28,13 +36,15 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from .config import PROFILES
+from .config import CONFIRM_KEYS, CONFIRM_MODES, PROFILES
 
 log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 60
 MAX_TIMEOUT_S = 600
 MAX_MESSAGE_CHARS = 1000
+MAX_TEXT_CHARS = 300
+MAX_NAME_CHARS = 80
 
 
 class CommandError(ValueError):
@@ -48,6 +58,10 @@ class OutboundCall:
     profile: str
     person: str = ""
     timeout: int = DEFAULT_TIMEOUT_S
+    confirm: str = "implicit"
+    confirm_key: str = "1"
+    confirm_text: str = ""
+    assistant_name: str = ""  # empty: the add-on's assistant_name
     created: float = field(default_factory=time.monotonic)
 
     @property
@@ -69,19 +83,30 @@ def parse_command(data: Any) -> OutboundCall:
     message = str(data.get("message") or "").strip()
     if not message:
         raise CommandError("message is missing")
-    profile = str(data.get("profile") or "").strip().lower()
-    if profile not in PROFILES:
+    profiles = {p.lower(): p for p in PROFILES}
+    profile = profiles.get(str(data.get("profile") or "").strip().lower())
+    if profile is None:
         raise CommandError(f"profile must be one of {', '.join(PROFILES)}")
     try:
         timeout = int(data.get("timeout") or DEFAULT_TIMEOUT_S)
     except (TypeError, ValueError):
         raise CommandError("timeout must be a number of seconds") from None
+    confirm = str(data.get("confirm") or "implicit").strip().lower()
+    if confirm not in CONFIRM_MODES:
+        raise CommandError(f"confirm must be one of {', '.join(CONFIRM_MODES)}")
+    confirm_key = str(data.get("confirm_key") or "1").strip()
+    if len(confirm_key) != 1 or confirm_key not in CONFIRM_KEYS:
+        raise CommandError("confirm_key must be one key: 0-9, * or #")
     return OutboundCall(
         call_id=call_id,
         message=message[:MAX_MESSAGE_CHARS],
         profile=profile,
         person=str(data.get("person") or "").strip(),
         timeout=max(10, min(timeout, MAX_TIMEOUT_S)),
+        confirm=confirm,
+        confirm_key=confirm_key,
+        confirm_text=str(data.get("confirm_text") or "").strip()[:MAX_TEXT_CHARS],
+        assistant_name=str(data.get("assistant_name") or "").strip()[:MAX_NAME_CHARS],
     )
 
 

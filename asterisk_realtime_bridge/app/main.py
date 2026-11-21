@@ -15,7 +15,7 @@ from websockets.asyncio.client import connect
 
 from . import __version__
 from .audiosocket import KIND_HANGUP, KIND_UUID, pack_frame, read_frame
-from .config import DEPRECATED_MODELS, Config, ConfigError, load
+from .config import DEPRECATED_MODELS, PROFILE_INBOUND, Config, ConfigError, load
 from .ha import HomeAssistant
 from .outbound import CommandError, OutboundCall, Registry, parse_command, read_commands
 from .session import CallSession, keepalive
@@ -165,7 +165,10 @@ class Bridge:
         if outbound:
             data = self._event(outbound, "ended", result)
         else:
-            data = {"call_id": full_id, "direction": "inbound", "stage": "ended", "result": result}
+            data = {"call_id": full_id, "direction": "inbound", "stage": "ended",
+                    "profile": PROFILE_INBOUND, "result": result}
+        if session and session.confirmed_by:
+            data["confirmed_by"] = session.confirmed_by
         data["duration"] = round(duration)
         data["pin_verified"] = bool(session and session.pin_person is not None)
         if session and session.pin_person:

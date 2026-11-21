@@ -28,7 +28,7 @@ configuration:
     description: PIN global, solo dígitos. Se puede decir en voz alta o teclear en el móvil. Con "Exigir PIN" activado, configura este PIN, PINs personales o ambos.
   pins:
     name: PINs personales
-    description: Un PIN por persona (nombre y dígitos). Se acepta cualquier PIN configurado; el nombre indica quién lo verificó y se envía a Home Assistant en el evento de la llamada.
+    description: Un PIN por persona (nombre y dígitos). Las llamadas entrantes aceptan cualquier PIN; una saliente Management solo acepta el PIN global y el de la persona llamada. El nombre se envía a Home Assistant en el evento de la llamada.
   max_pin_attempts:
     name: Intentos de PIN
     description: Tras estos fallos se cuelga la llamada.
@@ -46,7 +46,7 @@ configuration:
     description: Se usa si el agente principal no entiende la orden, por ejemplo conversation.openai_conversation. Añade latencia y coste.
   query_agent:
     name: Agente de solo consulta para llamadas salientes (opcional)
-    description: Responde preguntas en las llamadas salientes antes de verificar un PIN (y siempre en el perfil soloconsulta). Usa un agente SIN control de Home Assistant, por ejemplo un agente de OpenAI con "Controlar Home Assistant" desactivado. Vacío = sin preguntas en llamadas salientes.
+    description: Responde preguntas en las llamadas salientes antes de verificar un PIN (y siempre en el perfil QueryOnly). Usa un agente SIN control de Home Assistant, por ejemplo un agente de OpenAI con "Controlar Home Assistant" desactivado. Vacío = sin preguntas en llamadas salientes.
   vad:
     name: Detección de turnos
     description: server_vad (por silencio) o semantic_vad (por significado).

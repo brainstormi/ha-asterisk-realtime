@@ -15,7 +15,7 @@ Phone ──► SIP trunk ──► Asterisk ──AudioSocket (TCP)──► th
 * **Real barge-in:** the assistant's audio waits in a local queue that is emptied the instant the caller speaks, and the model is told what the caller actually heard (`conversation.item.truncate`).
 * **Security enforced in code:** with the PIN enabled, the tool that touches your home is rejected until the PIN is verified (spoken or typed on the keypad).
 * **The model never gets a Home Assistant token.** It sends natural-language requests to a conversation agent, which only acts on the entities **exposed to Assist**.
-* **Outbound notice calls:** Home Assistant can have the assistant call a phone, read a notice and answer questions, with `soloconsulta` / `gestion` profiles and a result event (`no_answer`, `answered`, `confirmed`, `failed`). See *Outbound calls* in DOCS.md.
+* **Outbound notice calls:** Home Assistant can have the assistant call a phone, read a notice and answer questions, with `QueryOnly` / `Management` profiles, per-call confirmation and a result event (`no_answer`, `answered`, `confirmed`, `failed`). See *Outbound calls* in DOCS.md.
 
 ## Why AudioSocket and not SIP or WebRTC directly?
 

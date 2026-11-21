@@ -1,11 +1,14 @@
 # Changelog
 
 ## 0.3.0
-- **Outbound calls with a notice.** Home Assistant registers a call through the add-on's stdin (`hassio.addon_stdin`, no port needed) and has Asterisk dial the number; when it is answered, the assistant reads the notice, asks the person to confirm it and stays on the line for questions.
-- Profiles for outbound calls: `soloconsulta` (questions only, changes impossible, no PIN) and `gestion` (questions right away, changes after a PIN). Incoming calls still require the PIN for everything.
+- **Outbound calls with a notice.** Home Assistant registers a call through the add-on's stdin (`hassio.addon_stdin`, no port needed) and has Asterisk dial the number; when it is answered, the assistant reads the notice and stays on the line for questions.
+- Profiles for outbound calls: `QueryOnly` (questions only, changes impossible, no PIN) and `Management` (questions right away, changes after the global PIN or the personal PIN of the person called). Incoming calls (`InboundCall`) still require the PIN for everything.
+- Per-call confirmation chosen by the caller: `implicit`, `voice`, `dtmf` or `voice_or_dtmf`, with an optional key and text (for example the consequence of confirming). The result reports how it was confirmed (`confirmed_by`).
+- Per-call `assistant_name`, to introduce the assistant differently (for example to people outside the home).
 - New `query_agent` option: a read-only conversation agent for questions in outbound calls before a PIN is verified.
-- New `pins` option: personal PINs (name and digits), alongside or instead of the global PIN. The name of whoever verified is logged and reported.
+- New `pins` option: personal PINs (name and digits), alongside or instead of the global PIN.
 - The bridge fires `asterisk_realtime_bridge_call` events (`answered`, `ended` with `no_answer`, `answered`, `confirmed` or `failed`) so scripts can retry, escalate or fall back.
+- The greeting now introduces the assistant by its name.
 
 ## 0.2.6
 - Fix: spoken PINs were rejected when the model passed them as words or grouped numbers. The `verify_pin` tool now asks for individual numerals, and spelled-out digit words (English/Spanish) are accepted.

@@ -166,20 +166,38 @@ Command (the `input` of `hassio.addon_stdin`, addon `<slug>_asterisk_realtime_br
 action: outbound
 call_id: "0b6c3a52-7f0e-4d3c-9a51-2f5d8e9a1c07"  # a new UUID per attempt; also used in the dialplan
 message: "The alarm went off: motion in the garage at 03:12."
-profile: gestion        # soloconsulta or gestion
-person: Sonia           # optional, reported back in the events
+profile: Management     # QueryOnly or Management
+person: Sonia           # optional; selects the personal PIN and is reported back
 timeout: 60             # seconds to answer before the result is no_answer
+confirm: voice_or_dtmf  # optional: implicit (default), voice, dtmf or voice_or_dtmf
+confirm_key: "1"        # optional, default 1 (0-9, * or #)
+confirm_text: "If you confirm, nobody else will be called."   # optional, said when asking
+assistant_name: "the alarm service of the house"              # optional, default: the add-on's
 ```
+
+The bridge keeps no contacts and no call policy: who to call, with which profile, what counts as a confirmation and what to do with the result are decided by the caller (your script, automation or alarm) in every command.
 
 ### Profiles
 
-| | Incoming call | `soloconsulta` | `gestion` |
+| | Incoming call (`InboundCall`) | `QueryOnly` | `Management` |
 |---|---|---|---|
 | Starts with | greeting + PIN | the notice | the notice |
 | Questions about the home | after the PIN | yes, with `query_agent` | yes, with `query_agent` (full agent after the PIN) |
 | Changes | after the PIN | **never** (no PIN, not even a correct one) | after the PIN |
+| Accepted PINs | global and every personal PIN | none | the global PIN and the personal PIN of `person` |
 
-An incoming caller ID can be spoofed, so incoming calls need the PIN for everything. In an outbound call you chose the number, so questions are allowed; but someone else may answer, so changes still need the PIN (`gestion`) or are impossible (`soloconsulta`).
+An incoming caller ID can be spoofed, so incoming calls need the PIN for everything. In an outbound call you chose the number, so questions are allowed; but someone else may answer, so changes still need the PIN (`Management`) or are impossible (`QueryOnly`). In a `Management` call only the global PIN and the personal PIN whose name matches `person` (case-insensitive) are accepted: someone else who answers that phone cannot use their own PIN. Without a global PIN and without a personal PIN for `person`, the call cannot change anything.
+
+### Confirmation
+
+| `confirm` | The assistant | What counts |
+|---|---|---|
+| `implicit` (default) | does not ask; it reads the conversation | the person reacts to the notice: replies, asks something, says ok or goodbye |
+| `voice` | asks explicitly (and says `confirm_text`) | a clear yes |
+| `dtmf` | asks to press `confirm_key` (and says `confirm_text`) | only the key |
+| `voice_or_dtmf` | asks for either | a clear yes or the key |
+
+A voicemail greeting, silence or hanging up without reacting is never a confirmation. In a `Management` call where a PIN can be typed, a digit confirmation key only counts if no other key follows within 2 seconds (otherwise the keys are taken as a PIN); `#` or `*` avoid that wait.
 
 `query_agent` must be a conversation agent **without control of Home Assistant** (for example a second OpenAI Conversation agent with "Control Home Assistant" off, whose instructions give it the states it may talk about). The bridge never sends unverified requests to `conversation_agent` or `fallback_agent`. Without `query_agent`, outbound calls only deliver the notice.
 
@@ -193,7 +211,8 @@ Event `asterisk_realtime_bridge_call`:
 | `direction` | `outbound` (or `inbound` for incoming calls, only `stage: ended`) |
 | `stage` | `answered`, `ended` |
 | `result` (when `ended`) | `no_answer` (not answered within `timeout`), `answered`, `confirmed` (the person confirmed the notice), `failed` (invalid command, too many calls, or the assistant could not start, e.g. OpenAI unreachable) |
-| `profile`, `person` | as sent in the command |
+| `profile`, `person` | as sent in the command (`InboundCall` for incoming calls) |
+| `confirmed_by` | when confirmed: `implicit`, `voice` or `dtmf` |
 | `duration`, `pin_verified`, `pin_person` | when `ended`; `pin_person` is the name of the personal PIN (empty for the global one) |
 
 A voicemail can answer the call: then the result is `answered`, not `confirmed`. Use `confirmed` when you need to know that a person got the notice.
