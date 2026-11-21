@@ -99,6 +99,14 @@ class PinConfigTests(unittest.TestCase):
         dtmf = cfg.instructions_for(OutboundCall(CALL_ID, "m", "QueryOnly", confirm="dtmf"), "locked")
         self.assertIn("Only the key counts", dtmf)
 
+    def test_notice_is_part_of_the_session_instructions(self):
+        # If the greeting is interrupted, the per-response instructions are lost:
+        # the notice must also be in the session instructions.
+        cfg = Config(openai_api_key="k", pin="1234")
+        call_ = OutboundCall(CALL_ID, "The garage door opened at 08:57.", "Management")
+        self.assertIn('"The garage door opened at 08:57."', cfg.instructions_for(call_, "pin"))
+        self.assertNotIn("The notice to deliver", cfg.instructions)
+
     def test_assistant_name_per_call(self):
         cfg = Config(openai_api_key="k", pin="1234", assistant_name="Jarvis")
         self.assertIn("You are Jarvis", cfg.instructions)

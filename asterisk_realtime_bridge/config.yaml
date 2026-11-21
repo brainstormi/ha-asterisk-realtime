@@ -1,5 +1,5 @@
 name: Asterisk Realtime Bridge
-version: "0.3.1"
+version: "0.3.2"
 slug: asterisk_realtime_bridge
 description: Talk to Home Assistant by phone (Asterisk AudioSocket + OpenAI Realtime API) with barge-in.
 url: https://github.com/brainstormi/ha-asterisk-realtime

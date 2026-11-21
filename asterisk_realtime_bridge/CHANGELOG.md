@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.2
+- Fix: in an outbound call, if the person spoke over the greeting (for example "¿sí?" when answering), the assistant lost the notice and asked the person for it. The notice is now also part of the call's instructions, not only of the greeting.
+
 ## 0.3.1
 - Jitter buffer for the assistant's voice: playback of each response starts once 200 ms of audio are queued (or the response's audio is complete) and buffers again if the audio runs dry mid-response. Short delays from OpenAI no longer cut the voice, at the cost of about 0.2 s before the assistant starts speaking.
 - The log reports how many times the audio ran dry in a call (each one at debug level).

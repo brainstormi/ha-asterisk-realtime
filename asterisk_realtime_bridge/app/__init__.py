@@ -1,3 +1,3 @@
 """Bridge between Asterisk (AudioSocket), the OpenAI Realtime API and Home Assistant."""
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
