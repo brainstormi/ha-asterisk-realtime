@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "asterisk_realt
 if "aiohttp" not in sys.modules:
     fake_aiohttp = types.ModuleType("aiohttp")
     fake_aiohttp.ClientConnectorError = type("ClientConnectorError", (Exception,), {})
+    fake_aiohttp.ClientResponseError = type("ClientResponseError", (Exception,), {})
     fake_aiohttp.ClientTimeout = lambda total=None: ("timeout", total)
     fake_aiohttp.ClientSession = object
     sys.modules["aiohttp"] = fake_aiohttp

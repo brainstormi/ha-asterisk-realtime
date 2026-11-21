@@ -11,6 +11,18 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 
+class HomeAssistantError(Exception):
+    """An HTTP error from Home Assistant.
+
+    aiohttp's own exception includes the request headers in its text, and so
+    the Supervisor token: never let it reach the log.
+    """
+
+    def __init__(self, status: int, path: str, detail: str = "") -> None:
+        super().__init__(f"HTTP {status} from {path}" + (f": {detail}" if detail else ""))
+        self.status = status
+
+
 class HomeAssistant:
     """Sends natural-language requests to a Home Assistant conversation agent.
 
@@ -96,10 +108,11 @@ class HomeAssistant:
             payload["language"] = language
         try:
             data = await self._request("POST", "tts_get_url", payload)
-        except aiohttp.ClientResponseError as err:
-            if not language or err.status != 400:
+        except HomeAssistantError:
+            if not language:
                 raise
-            # The engine may not know this language code: use its default.
+            # The engine may not know this language code (Piper wants "es_ES",
+            # not "es"; Home Assistant answers 500): use the engine's default.
             payload.pop("language")
             data = await self._request("POST", "tts_get_url", payload)
         path = str((data or {}).get("path") or "")
@@ -135,6 +148,8 @@ class HomeAssistant:
             except aiohttp.ClientConnectorError as err:
                 last_error = err
                 continue
+            except aiohttp.ClientResponseError as err:  # its text carries the token
+                raise HomeAssistantError(err.status, command) from None
         raise ConnectionError(f"Could not reach Home Assistant: {last_error}")
 
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -157,7 +172,9 @@ class HomeAssistant:
                     headers=headers,
                     timeout=timeout,
                 ) as resp:
-                    resp.raise_for_status()
+                    if resp.status >= 400:
+                        detail = (await resp.text())[:200].strip()
+                        raise HomeAssistantError(resp.status, path, detail)
                     if kind == "text":
                         data = await resp.text()
                     elif kind == "bytes":
@@ -168,6 +185,8 @@ class HomeAssistant:
                 # No route to this URL: try the next one.
                 last_error = err
                 continue
+            except aiohttp.ClientResponseError as err:  # e.g. not JSON; its text carries the token
+                raise HomeAssistantError(err.status, path) from None
             # Remember the URL that works for the following requests.
             self._urls.remove(base)
             self._urls.insert(0, base)
