@@ -20,10 +20,15 @@ from tests.test_session import FakeHome, FakeWriter, FakeWS, call  # noqa: E402
 CALL_ID = "0b6c3a52-7f0e-4d3c-9a51-2f5d8e9a1c07"
 
 
-class FakeQuery(FakeHome):
-    async def ask(self, text):
-        self.calls.append(text)
-        return {"type": "query_answer", "response": "The garage door is closed."}
+class FakeStatus:
+    def __init__(self):
+        self.searches = []
+
+    async def snapshot(self, search=""):
+        self.searches.append(search)
+        return {"now": "2026-11-21 17:00", "entities": [
+            {"name": "Puerta garaje", "entity_id": "binary_sensor.garaje", "state": "off",
+             "device_class": "garage_door"}]}
 
 
 # --------------------------------------------------------------- config
@@ -65,9 +70,17 @@ class PinConfigTests(unittest.TestCase):
                           "pins": [{"name": "Sonia", "pin": "4321"}]})
         self.assertEqual(cfg.pin_entries, ())
 
-    def test_query_agent_option(self):
-        cfg = self._load({"openai_api_key": "k", "pin": "1", "query_agent": "conversation.consulta"})
-        self.assertEqual(cfg.query_agent, "conversation.consulta")
+    def test_query_scope_options(self):
+        cfg = self._load({"openai_api_key": "k", "pin": "1"})
+        self.assertEqual((cfg.query_include, cfg.query_exclude), ("", ""))
+        cfg = self._load({"openai_api_key": "k", "pin": "1", "query_include": "Cámaras, Seguridad",
+                          "query_exclude": "lock.entrada"})
+        self.assertEqual((cfg.query_include, cfg.query_exclude), ("Cámaras, Seguridad", "lock.entrada"))
+
+    def test_status_reading_rules_are_in_outbound_calls_only(self):
+        cfg = Config(openai_api_key="k", pin="1234")
+        self.assertIn("year 2000", cfg.instructions_for(OutboundCall(CALL_ID, "m", "QueryOnly"), "locked"))
+        self.assertNotIn("home_status", cfg.instructions)
 
     def test_outbound_instructions(self):
         cfg = Config(openai_api_key="k", pin="1234")
@@ -216,7 +229,7 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
 
 # -------------------------------------------------------------- session
 class OutboundSessionTests(unittest.IsolatedAsyncioTestCase):
-    async def start(self, profile, cfg=None, query=True, message="The garage door opened at 08:57.",
+    async def start(self, profile, cfg=None, status=True, message="The garage door opened at 08:57.",
                     person="Sonia", **call_options):
         if getattr(self, "task", None):  # a second call in the same test
             self.task.cancel()
@@ -224,11 +237,11 @@ class OutboundSessionTests(unittest.IsolatedAsyncioTestCase):
         self.cfg = cfg or Config(openai_api_key="k", pin="1111", assistant_name="Jarvis",
                                  pins=(("Sonia", "4321"), ("Raul", "8765")), max_call_seconds=5)
         self.ws, self.writer = FakeWS(), FakeWriter()
-        self.home, self.query = FakeHome(), (FakeQuery() if query else None)
+        self.home, self.status = FakeHome(), (FakeStatus() if status else None)
         self.reader = asyncio.StreamReader()
         outbound = OutboundCall(CALL_ID, message, profile, person=person, **call_options)
         self.session = CallSession(self.cfg, "out", self.reader, self.writer, self.ws, self.home,
-                                   outbound=outbound, query_home=self.query)
+                                   outbound=outbound, status=self.status)
         self.task = asyncio.create_task(self.session.run())
         await asyncio.sleep(0.01)
         self.ws.push({"type": "session.updated"})
@@ -276,36 +289,52 @@ class OutboundSessionTests(unittest.IsolatedAsyncioTestCase):
     # ---- QueryOnly
     async def test_query_only_reads_and_has_no_pin(self):
         await self.start("QueryOnly")
-        self.assertEqual(self.tool_names(), ["home", "hang_up", "confirm_notice"])
+        self.assertEqual(self.tool_names(), ["home_status", "hang_up", "confirm_notice"],
+                         "the tool that can act is not even offered")
         self.assertIn("OUTBOUND", self.ws.sent[0]["session"]["instructions"])
 
-        out = await self.tool("home", {"request": "open the garage door"}, "q1")
-        self.assertEqual(self.query.calls, ["open the garage door"])
+        out = await self.tool("home_status", {"search": "garaje"}, "q1")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["entities"][0]["state"], "off")
+        self.assertEqual(self.status.searches, ["garaje"])
+
+        # Asking the acting tool anyway (the model should not, but code decides).
+        out = await self.tool("home", {"request": "open the garage door"}, "a1")
+        self.assertFalse(out["ok"])
         self.assertEqual(self.home.calls, [], "the full agent is never used")
-        self.assertIn("nothing can be changed", out["note"])
 
         # Even the right PIN does not unlock anything in this profile.
         self.assertFalse((await self.tool("verify_pin", {"pin": "1111"}, "p1"))["ok"])
         await self.keys("1111")
-        await self.tool("home", {"request": "open the garage door"}, "q2")
+        await self.tool("home", {"request": "open the garage door"}, "a2")
         self.assertEqual(self.home.calls, [])
         self.assertIsNone(self.session.pin_person)
 
-    async def test_questions_unavailable_without_query_agent(self):
-        await self.start("QueryOnly", query=False)
-        out = await self.tool("home", {"request": "is anyone outside?"}, "q1")
+    async def test_status_unavailable(self):
+        await self.start("QueryOnly", status=False)
+        out = await self.tool("home_status", {}, "q1")
         self.assertFalse(out["ok"])
-        self.assertEqual(self.home.calls, [])
+
+    async def test_status_errors_are_reported(self):
+        await self.start("QueryOnly")
+
+        async def broken(search=""):
+            raise ConnectionError("down")
+
+        self.status.snapshot = broken
+        out = await self.tool("home_status", {}, "q1")
+        self.assertEqual(out, {"ok": False, "error": "Could not read the state of the home."})
 
     # ---- Management and PIN scope
     async def test_management_reads_first_and_acts_after_the_called_persons_pin(self):
         await self.start("Management")
-        self.assertEqual(self.tool_names(), ["verify_pin", "home", "hang_up", "confirm_notice"])
+        self.assertEqual(self.tool_names(), ["verify_pin", "home_status", "home", "hang_up", "confirm_notice"])
 
-        out = await self.tool("home", {"request": "is the garage door open?"}, "q1")
-        self.assertTrue(out["ok"])
-        self.assertEqual(self.query.calls, ["is the garage door open?"])
-        self.assertIn("PIN", out["note"])
+        self.assertTrue((await self.tool("home_status", {}, "q1"))["ok"])
+        out = await self.tool("home", {"request": "close the garage door"}, "a0")
+        self.assertFalse(out["ok"])
+        self.assertIn("PIN", out["error"])
+        self.assertEqual(self.home.calls, [])
 
         # Raul's personal PIN is not valid in a call to Sonia.
         self.assertFalse((await self.tool("verify_pin", {"pin": "8765"}, "p1"))["ok"])
@@ -313,8 +342,8 @@ class OutboundSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.pin_person, "Sonia")
 
         out = await self.tool("home", {"request": "close the garage door"}, "a1")
+        self.assertTrue(out["ok"])
         self.assertEqual(self.home.calls, ["close the garage door"])
-        self.assertNotIn("note", out)
 
     async def test_management_accepts_the_global_pin_by_keypad(self):
         await self.start("Management")
@@ -330,14 +359,14 @@ class OutboundSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_management_is_locked_without_an_applicable_pin(self):
         cfg = Config(openai_api_key="k", pins=(("Raul", "8765"),), max_call_seconds=5)
         await self.start("Management", cfg=cfg, person="Grandma")
-        self.assertNotIn("verify_pin", self.tool_names())
+        self.assertEqual(self.tool_names(), ["home_status", "hang_up", "confirm_notice"])
         self.assertFalse((await self.tool("verify_pin", {"pin": "8765"}, "p1"))["ok"])
         await self.tool("home", {"request": "close the garage door"}, "a1")
         self.assertEqual(self.home.calls, [])
 
     async def test_management_without_any_pin_can_act(self):
         await self.start("Management", cfg=Config(openai_api_key="k", pin_enabled=False, max_call_seconds=5))
-        self.assertNotIn("verify_pin", self.tool_names())
+        self.assertEqual(self.tool_names(), ["home_status", "home", "hang_up", "confirm_notice"])
         await self.tool("home", {"request": "close the garage door"}, "a1")
         self.assertEqual(self.home.calls, ["close the garage door"])
 
@@ -411,7 +440,7 @@ class InboundPersonalPinTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([t["name"] for t in update["session"]["tools"]], ["verify_pin", "home", "hang_up"])
 
         ws, home = FakeWS(), FakeHome()
-        session = CallSession(cfg, "in", asyncio.StreamReader(), FakeWriter(), ws, home, query_home=FakeQuery())
+        session = CallSession(cfg, "in", asyncio.StreamReader(), FakeWriter(), ws, home, status=FakeStatus())
         task = asyncio.create_task(session.run())
         await asyncio.sleep(0.01)
         ws.push({"type": "session.updated"})

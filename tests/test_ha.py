@@ -46,7 +46,8 @@ class FakeHttp:
         self.down = set(down)
         self.requests = []
 
-    def post(self, url, json, headers, timeout):
+    def request(self, method, url, json, headers, timeout):
+        assert method == "POST"
         self.requests.append((url, json["agent_id"], headers["Authorization"]))
         base = url.rsplit("/conversation/process", 1)[0]
         if base in self.down:

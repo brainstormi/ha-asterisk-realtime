@@ -113,23 +113,43 @@ def outbound_rules(
             "confirmation."
         )
     if profile == PROFILE_MANAGE and pins == "open":
-        rules.append("- The person can ask questions and request changes with the home tool.")
+        rules.append(
+            "- Answer questions with the home_status tool; make changes with the home tool."
+        )
     elif profile == PROFILE_MANAGE and pins == "pin":
         rules.append(
             "- Questions about the state of the home can be answered right away "
-            "with the home tool.\n"
+            "with the home_status tool.\n"
             "- To CHANGE anything (turn on or off, open, close, arm, disarm...) the "
-            "person must first verify their PIN with the verify_pin tool. Ask for it "
-            "only when they want to change something. Never reveal or hint at the PIN."
+            "person must first verify their PIN with the verify_pin tool; then use "
+            "the home tool. Ask for the PIN only when they want to change something. "
+            "Never reveal or hint at the PIN."
         )
     else:  # QueryOnly, or Management without a PIN that applies to this call
         rules.append(
             "- In this call you can ONLY answer questions about the state of the "
-            "home with the home tool. You cannot change anything and there is no PIN "
-            "or any other way to unlock changes. If they ask to change something, "
-            "say that it cannot be done from this call."
+            "home, with the home_status tool. You cannot change anything and there "
+            "is no PIN or any other way to unlock changes. If they ask to change "
+            "something, say that it cannot be done from this call."
         )
+    rules.append(STATUS_READING_RULES)
     return "\n".join(rules)
+
+
+# How to read the home_status tool (outbound calls).
+STATUS_READING_RULES = (
+    "- home_status returns the current state of the entities you may talk about. "
+    "Call it EVERY time before saying how something is now: never answer from "
+    "memory, things change during the call. Use its search argument with one word "
+    "(for example \"garaje\") to narrow the list.\n"
+    "- Reading it: \"now\" is the current local time; \"since\" is when that state "
+    "began. Values that are dates are local times: compare them with \"now\" to say "
+    "how long ago. A date in the year 2000 or earlier means never. For on/off "
+    "states use device_class: door, garage_door, window or opening on = open; "
+    "motion, occupancy or presence on = detected. unavailable or unknown = no data.\n"
+    "- If something is not in the list, say you have no information about it. "
+    "Never guess or invent a state."
+)
 
 
 _LANGUAGE_NAMES = {
@@ -215,8 +235,11 @@ class Config:
     max_call_seconds: int = 300
     conversation_agent: str = "conversation.home_assistant"
     fallback_agent: str = ""
-    # Agent for read-only questions in outbound calls (should have no control).
-    query_agent: str = ""
+    # Read-only scope for outbound calls without a PIN (home_status tool):
+    # labels to include (empty = entities exposed to Assist) and labels,
+    # entity ids or device names to exclude. Add-on options only, never per call.
+    query_include: str = ""
+    query_exclude: str = ""
     vad: str = "server_vad"
     vad_threshold: float = 0.5
     vad_silence_ms: int = 500
@@ -386,7 +409,8 @@ def load(path: str | None = None) -> Config:
         max_call_seconds=int(raw.get("max_call_seconds", defaults.max_call_seconds)),
         conversation_agent=text("conversation_agent", defaults.conversation_agent),
         fallback_agent=text("fallback_agent", ""),
-        query_agent=text("query_agent", ""),
+        query_include=text("query_include", ""),
+        query_exclude=text("query_exclude", ""),
         vad=vad,
         vad_threshold=float(raw.get("vad_threshold", defaults.vad_threshold)),
         vad_silence_ms=int(raw.get("vad_silence_ms", defaults.vad_silence_ms)),

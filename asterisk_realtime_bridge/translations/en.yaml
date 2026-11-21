@@ -44,9 +44,12 @@ configuration:
   fallback_agent:
     name: Fallback agent (optional)
     description: Used when the main agent does not understand the command, for example conversation.openai_conversation. Adds latency and cost.
-  query_agent:
-    name: Read-only agent for outbound calls (optional)
-    description: Answers questions in outbound calls before a PIN is verified (and always in the QueryOnly profile). Use an agent WITHOUT control of Home Assistant, for example an OpenAI agent with "Control Home Assistant" off. Empty = no questions in outbound calls.
+  query_include:
+    name: Read-only scope without PIN (labels)
+    description: "What an outbound call can tell before a PIN is verified (always in QueryOnly). Labels separated by commas, by name or id. EMPTY = the same entities exposed to Assist in Home Assistant (the scope you already control by voice). Nothing outside this scope can be read, and nothing can ever be changed without a PIN."
+  query_exclude:
+    name: Exclude from that scope
+    description: "Labels, entity ids (light.kitchen) or device names, separated by commas, removed from the read-only scope. Empty = nothing excluded."
   vad:
     name: Turn detection
     description: server_vad (silence based) or semantic_vad (meaning based).
