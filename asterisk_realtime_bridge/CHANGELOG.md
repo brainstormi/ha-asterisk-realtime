@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+- Jitter buffer for the assistant's voice: playback of each response starts once 200 ms of audio are queued (or the response's audio is complete) and buffers again if the audio runs dry mid-response. Short delays from OpenAI no longer cut the voice, at the cost of about 0.2 s before the assistant starts speaking.
+- The log reports how many times the audio ran dry in a call (each one at debug level).
+
 ## 0.3.0
 - **Outbound calls with a notice.** Home Assistant registers a call through the add-on's stdin (`hassio.addon_stdin`, no port needed) and has Asterisk dial the number; when it is answered, the assistant reads the notice and stays on the line for questions.
 - Profiles for outbound calls: `QueryOnly` (questions only, changes impossible, no PIN) and `Management` (questions right away, changes after the global PIN or the personal PIN of the person called). Incoming calls (`InboundCall`) still require the PIN for everything.

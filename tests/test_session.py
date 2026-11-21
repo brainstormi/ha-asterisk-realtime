@@ -160,6 +160,36 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(trunc[0]["audio_end_ms"], 20)
         self.assertLessEqual(trunc[0]["audio_end_ms"], 25 * 20)
 
+    async def test_short_audio_waits_for_the_buffer_or_the_end_of_the_item(self):
+        await self.ready()
+        ulaw = b"\xd0" * 800  # 100 ms: less than the prebuffer
+        self.ws.push({"type": "response.output_audio.delta", "item_id": "short",
+                      "delta": base64.b64encode(ulaw).decode()})
+        await asyncio.sleep(0.08)
+        self.assertEqual(self.writer.speech_frames(), [], "held until enough audio is queued")
+        self.ws.push({"type": "response.output_audio.done", "item_id": "short"})
+        await asyncio.sleep(0.2)
+        self.assertEqual(len(self.writer.speech_frames()), 5, "the whole item plays once complete")
+        self.assertEqual(self.session.underruns, 0)
+
+    async def test_late_audio_is_counted_as_an_underrun_and_rebuffered(self):
+        await self.ready()
+        ulaw = b"\xd0" * 1600  # 200 ms: exactly the prebuffer
+        self.ws.push({"type": "response.output_audio.delta", "item_id": "slow",
+                      "delta": base64.b64encode(ulaw).decode()})
+        await asyncio.sleep(0.35)
+        self.assertEqual(len(self.writer.speech_frames()), 10)
+        self.assertEqual(self.session.underruns, 1, "the item was not complete when the queue ran dry")
+        # More audio, still below the prebuffer: held until the item completes.
+        self.ws.push({"type": "response.output_audio.delta", "item_id": "slow",
+                      "delta": base64.b64encode(b"\xd0" * 400).decode()})
+        await asyncio.sleep(0.08)
+        self.assertEqual(len(self.writer.speech_frames()), 10)
+        self.ws.push({"type": "response.output_audio.done", "item_id": "slow"})
+        await asyncio.sleep(0.1)
+        self.assertEqual(len(self.writer.speech_frames()), 13)
+        self.assertEqual(self.session.underruns, 1)
+
     async def test_silence_is_sent_continuously_even_before_the_session_is_ready(self):
         # Asterisk hangs up after 2000 ms without activity on the AudioSocket
         # connection, so media must flow from the very first moment.

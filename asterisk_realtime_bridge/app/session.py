@@ -3,10 +3,13 @@
 Design
 ------
 * Uplink: 20 ms slin frames from Asterisk -> µ-law -> ``input_audio_buffer.append``.
-* Downlink: ``response.output_audio.delta`` (µ-law, delivered faster than real
-  time) -> slin -> local queue -> a "pacer" sends it to Asterisk at 20 ms per
-  frame. Because the queue lives on our side, interrupting is instantaneous:
-  we just empty the queue.
+* Downlink: ``response.output_audio.delta`` (µ-law, usually delivered faster
+  than real time) -> slin -> local queue -> a "pacer" sends it to Asterisk at
+  20 ms per frame. Because the queue lives on our side, interrupting is
+  instantaneous: we just empty the queue.
+* Jitter buffer: playback of a response starts once ``PREBUFFER_MS`` of audio
+  are queued (or the response's audio is complete), and restarts the same way
+  if the queue runs dry mid-response, so a late delta does not cut the voice.
 * Barge-in: on ``input_audio_buffer.speech_started`` we empty the queue and send
   ``conversation.item.truncate`` with the milliseconds the caller actually
   heard, so the model knows what was really said.
@@ -50,6 +53,8 @@ FLUSH_GRACE_S = 0.6
 # A confirmation key that is also a digit, in a call where a PIN can be typed,
 # counts only if no other key follows within this time.
 CONFIRM_KEY_WAIT_S = 2.0
+# Audio queued before playback starts (and restarts after running dry).
+PREBUFFER_MS = 200
 
 # 20 ms of digital silence. Asterisk's AudioSocket application hangs up if it
 # sees no activity (from the channel or from the server) for 2000 ms, and some
@@ -282,6 +287,9 @@ class CallSession:
         self._carry = bytearray()
         self._carry_item: str | None = None
         self._played_ms: dict[str, int] = collections.defaultdict(int)
+        self._audio_done: set[str] = set()  # items whose audio is complete
+        self._buffering = True
+        self.underruns = 0  # times the audio ran dry mid-response
 
         self._ready = asyncio.Event()
         self._finished = asyncio.Event()
@@ -337,6 +345,11 @@ class CallSession:
             for task in (*workers.values(), *self._tool_tasks):
                 task.cancel()
             await asyncio.gather(*workers.values(), *self._tool_tasks, return_exceptions=True)
+            if self.underruns:
+                log.info(
+                    "[%s] the assistant's audio ran dry %d time(s) mid-response",
+                    self.call_id, self.underruns,
+                )
             await self._terminate()
 
     async def _terminate(self) -> None:
@@ -407,6 +420,8 @@ class CallSession:
             self._deliver_audio(event.get("item_id", ""), base64.b64decode(event.get("delta", "")))
         elif kind == "response.output_audio.done":
             self._flush_carry()
+            if event.get("item_id"):
+                self._audio_done.add(event["item_id"])
         elif kind == "response.done":
             await self._on_response_done(event.get("response") or {})
         elif kind == "error":
@@ -482,6 +497,17 @@ class CallSession:
             self._out.append((self._carry_item, padded))
         self._carry.clear()
 
+    def _can_play(self) -> bool:
+        if not self._out:
+            return False
+        if not self._buffering:
+            return True
+        frames_needed = max(1, PREBUFFER_MS // FRAME_MS)
+        if len(self._out) >= frames_needed or self._out[-1][0] in self._audio_done:
+            self._buffering = False
+            return True
+        return False
+
     async def _pacer(self) -> None:
         loop = asyncio.get_running_loop()
         next_tick = loop.time()
@@ -489,16 +515,22 @@ class CallSession:
             delay = next_tick - loop.time()
             if delay > 0:
                 await asyncio.sleep(delay)
-            if self._out:
+            if self._can_play():
                 item_id, frame = self._out.popleft()
                 self.writer.write(pack_frame(KIND_AUDIO, frame))
                 await self.writer.drain()
                 self._played_ms[item_id] += FRAME_MS
+                if not self._out:
+                    # Ran dry: buffer again before the next audio plays.
+                    self._buffering = True
+                    if item_id not in self._audio_done:
+                        self.underruns += 1
+                        log.debug("[%s] audio underrun (%d)", self.call_id, self.underruns)
                 next_tick += self.frame_seconds
                 if next_tick < loop.time() - 0.1:  # fell behind: do not burst
                     next_tick = loop.time()
             else:
-                # Nothing to say: keep the media flowing with silence.
+                # Nothing to say (or buffering): keep the media flowing with silence.
                 self.writer.write(pack_frame(KIND_AUDIO, SILENCE_FRAME))
                 await self.writer.drain()
                 next_tick += self.frame_seconds
@@ -515,6 +547,7 @@ class CallSession:
             pending.append(self._carry_item)
         self._out.clear()
         self._carry.clear()
+        self._buffering = True
         for item_id in pending:
             await self._send(
                 {
