@@ -50,6 +50,15 @@ configuration:
   query_exclude:
     name: Excluir de ese alcance
     description: "Etiquetas, ids de entidad (light.cocina) o nombres de dispositivo, separados por comas, que se quitan del alcance de consulta. Vacío = no se excluye nada."
+  fallback_tts:
+    name: Voz de respaldo si falla OpenAI (entidad TTS)
+    description: "Una entidad TTS de Home Assistant, por ejemplo tts.piper. Si OpenAI no está disponible (caída, clave inválida, sin saldo), los avisos salientes se leen con ella y se confirman con una tecla, y las llamadas entrantes oyen que el asistente no está disponible. Vacío = sin respaldo."
+  fallback_tts_voice:
+    name: Voz de respaldo (opcional)
+    description: "Una voz de ese motor TTS, por ejemplo es_ES-davefx-medium para Piper. Vacío = la voz por defecto del motor."
+  openai_check_minutes:
+    name: Comprobar OpenAI cada (minutos)
+    description: "Cada cuánto comprueba el bridge que OpenAI funciona (abre y cierra una sesión, sin audio ni tokens) y publica binary_sensor.asterisk_realtime_bridge_openai. 0 = solo al arrancar. Las llamadas reales también lo actualizan."
   vad:
     name: Detección de turnos
     description: server_vad (por silencio) o semantic_vad (por significado).

@@ -112,7 +112,7 @@ The model follows this to a degree, and the result depends on the model and the 
 The log should show:
 
 ```
-Asterisk Realtime Bridge 0.4.0 listening on 127.0.0.1:9092 (model gpt-realtime-2.1, PIN enabled)
+Asterisk Realtime Bridge 0.5.0 listening on 127.0.0.1:9092 (model gpt-realtime-2.1, PIN enabled)
 ```
 
 The image is built on your own machine from the `Dockerfile`, with no external registry involved. Reinstalling on a clean system means repeating the two steps above.
@@ -228,7 +228,7 @@ The tests use simulated Asterisk, OpenAI and Home Assistant endpoints and need n
 ## Status and limitations
 
 * Early release. The logic is covered by unit tests with simulated endpoints; field reports are welcome.
-* There is no local fallback yet when OpenAI is unavailable: an outbound call then ends with `result: failed`, so the calling automation can fall back to another channel.
+* The fallback when OpenAI is unavailable (`fallback_tts`) only reads notices and messages: without OpenAI there is no conversation yet.
 * GPT-Live is not supported.
 
 ## License

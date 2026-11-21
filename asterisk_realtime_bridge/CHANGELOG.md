@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+- **Fallback when OpenAI is unavailable** (`fallback_tts`, for example `tts.piper`): outbound notices are read twice with Home Assistant's TTS and confirmed with a key; incoming calls hear that the assistant is not available. The notice audio is generated while the phone rings. Also used if OpenAI drops mid-call before the notice was confirmed. Events carry `fallback: true`.
+- **OpenAI check** every `openai_check_minutes` (default 15): opens and closes a Realtime session (no audio, no tokens) and publishes `binary_sensor.asterisk_realtime_bridge_openai` with the reason when it fails (for example `insufficient_quota`).
+
 ## 0.4.0
 - **Read-only questions without a PIN, built into the bridge.** In outbound calls, the assistant answers questions with the new `home_status` tool: a read-only list of states (name, state, type, since when, current time) that the bridge builds from Home Assistant. It replaces the `query_agent` option, which is removed.
 - New `query_include` and `query_exclude` options set that scope, only in the add-on configuration. Empty include = the entities exposed to Assist.

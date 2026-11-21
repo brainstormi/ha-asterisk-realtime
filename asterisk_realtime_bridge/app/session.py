@@ -324,9 +324,19 @@ class CallSession:
         self.confirmed = False  # the person confirmed the notice
         self.confirmed_by: str | None = None  # "implicit", "voice" or "dtmf"
         self.pin_person: str | None = None  # who verified ("" = global PIN)
+        # Why the call ended: "asterisk", "openai", "ready" (OpenAI did not
+        # confirm the session), "finished" (hang_up), "pacer" or "timeout".
+        self.end_reason: str | None = None
+        self.openai_error = ""  # last error code sent by OpenAI
 
     # ------------------------------------------------------------------ run
-    async def run(self) -> None:
+    @property
+    def openai_failed(self) -> bool:
+        """OpenAI dropped the call while the phone was still connected."""
+        return self.end_reason in ("openai", "ready")
+
+    async def run(self, terminate: bool = True) -> None:
+        """Run the call. With ``terminate=False`` the caller hangs up (after a fallback)."""
         if self.profile == PROFILE_MANAGE and self._pin_state == "locked":
             log.warning(
                 "[%s] Management call without a global PIN or a personal PIN for %r: "
@@ -348,12 +358,15 @@ class CallSession:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if not done:
+                self.end_reason = "timeout"
                 log.info(
                     "[%s] maximum call duration reached (%ss)",
                     self.call_id,
                     self.cfg.max_call_seconds,
                 )
             for name, task in workers.items():
+                if task in done and self.end_reason is None:
+                    self.end_reason = name
                 if task in done and not task.cancelled() and task.exception():
                     log.warning("[%s] %s worker failed: %r", self.call_id, name, task.exception())
         finally:
@@ -365,7 +378,8 @@ class CallSession:
                     "[%s] the assistant's audio ran dry %d time(s) mid-response",
                     self.call_id, self.underruns,
                 )
-            await self._terminate()
+            if terminate:
+                await self._terminate()
 
     async def _terminate(self) -> None:
         try:
@@ -441,6 +455,7 @@ class CallSession:
             await self._on_response_done(event.get("response") or {})
         elif kind == "error":
             err = event.get("error") or {}
+            self.openai_error = str(err.get("code") or err.get("type") or "error")
             log.warning("[%s] OpenAI error: %s %s", self.call_id, err.get("code"), err.get("message"))
         elif self.cfg.log_transcripts:
             if kind == "conversation.item.input_audio_transcription.completed":

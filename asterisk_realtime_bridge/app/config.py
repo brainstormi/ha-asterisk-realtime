@@ -240,6 +240,12 @@ class Config:
     # entity ids or device names to exclude. Add-on options only, never per call.
     query_include: str = ""
     query_exclude: str = ""
+    # Fallback when OpenAI is unavailable: a Home Assistant TTS entity
+    # (e.g. tts.piper) and an optional voice. Empty = no fallback.
+    fallback_tts: str = ""
+    fallback_tts_voice: str = ""
+    # Periodic OpenAI check (minutes; 0 = only at start-up).
+    openai_check_minutes: int = 15
     vad: str = "server_vad"
     vad_threshold: float = 0.5
     vad_silence_ms: int = 500
@@ -411,6 +417,9 @@ def load(path: str | None = None) -> Config:
         fallback_agent=text("fallback_agent", ""),
         query_include=text("query_include", ""),
         query_exclude=text("query_exclude", ""),
+        fallback_tts=text("fallback_tts", ""),
+        fallback_tts_voice=text("fallback_tts_voice", ""),
+        openai_check_minutes=max(0, min(1440, int(raw.get("openai_check_minutes", 15)))),
         vad=vad,
         vad_threshold=float(raw.get("vad_threshold", defaults.vad_threshold)),
         vad_silence_ms=int(raw.get("vad_silence_ms", defaults.vad_silence_ms)),

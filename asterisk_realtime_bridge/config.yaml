@@ -1,5 +1,5 @@
 name: Asterisk Realtime Bridge
-version: "0.4.0"
+version: "0.5.0"
 slug: asterisk_realtime_bridge
 description: Talk to Home Assistant by phone (Asterisk AudioSocket + OpenAI Realtime API) with barge-in.
 url: https://github.com/brainstormi/ha-asterisk-realtime
@@ -50,6 +50,9 @@ options:
   fallback_agent: ""
   query_include: ""
   query_exclude: ""
+  fallback_tts: ""
+  fallback_tts_voice: ""
+  openai_check_minutes: 15
   vad: server_vad
   vad_threshold: 0.5
   vad_silence_ms: 500
@@ -78,6 +81,9 @@ schema:
   fallback_agent: str?
   query_include: str?
   query_exclude: str?
+  fallback_tts: str?
+  fallback_tts_voice: str?
+  openai_check_minutes: int(0,1440)
   vad: list(server_vad|semantic_vad)
   vad_threshold: float(0.1,0.95)
   vad_silence_ms: int(200,2000)

@@ -245,6 +245,21 @@ exten => _[0-9a-f].,1,NoOp(Notice ${EXTEN} answered)
 
 The ring time (30 s here) should be shorter than the command's `timeout`.
 
+## When OpenAI is unavailable (fallback)
+
+With `fallback_tts` set to a Home Assistant TTS entity (for example `tts.piper`), the bridge keeps working in a reduced mode when OpenAI cannot be used (outage, invalid key, no credit, or the connection drops mid-call):
+
+* **Outbound calls:** the notice is read twice with that voice and the person confirms by pressing `confirm_key` (speech cannot be understood without OpenAI, so the key counts whatever `confirm` says). The notice audio is generated while the phone rings. The `ended` event has `fallback: true` and `result` `confirmed` (with `confirmed_by: dtmf`) or `answered`.
+* **Incoming calls:** a short "the assistant is not available" message, then the call ends (`result: failed`, `fallback: true`).
+
+Home Assistant converts the audio to 8 kHz mono WAV itself, so nothing else is needed. Without `fallback_tts`, a call that cannot reach OpenAI ends with `result: failed`.
+
+### OpenAI check
+
+Every `openai_check_minutes` (default 15; 0 = only at start-up) the bridge opens a Realtime session and closes it as soon as OpenAI confirms it: no audio and no tokens, so no cost. It detects an invalid key, exhausted credit (`insufficient_quota`), no access to the model and outages. Real calls also update the result. It is published as `binary_sensor.asterisk_realtime_bridge_openai` (`on` = available, attribute `reason` when not), which you can use to be notified. The entity is created through the REST API: after a Home Assistant restart it reappears at the next check.
+
+OpenAI has no API for the remaining prepaid credit; set spending alerts and auto recharge in your OpenAI project settings to be warned before the credit runs out.
+
 ## Configuration
 
 | Option | Default | Purpose |
@@ -267,6 +282,8 @@ The ring time (30 s here) should be shorter than the command's `timeout`.
 | `vad`, `vad_threshold`, `vad_silence_ms` | `server_vad`, `0.5`, `500` | Turn detection |
 | `noise_reduction` | `near_field` | `near_field`, `far_field` or `off` |
 | `port` / `bind_address` | `9092` / `127.0.0.1` | Where AudioSocket listens |
+| `fallback_tts` / `fallback_tts_voice` | – / – | TTS entity (and voice) used when OpenAI is unavailable |
+| `openai_check_minutes` | `15` | OpenAI check interval (0 = only at start-up) |
 | `extra_instructions` | – | Appended after the prompt |
 | `log_transcripts` | `false` | Log what is said (private; for debugging only) |
 
@@ -296,5 +313,5 @@ The ring time (30 s here) should be shorter than the command's `timeout`.
 ## Status and limitations
 
 * Early release. The logic is covered by unit tests with simulated endpoints; field reports are welcome.
-* There is no local fallback yet when OpenAI is unavailable: an outbound call then ends with `result: failed`, so the calling automation can fall back to a push notification or another channel.
+* The fallback only reads notices and messages: without OpenAI there is no conversation yet.
 * GPT-Live is not supported.
