@@ -12,6 +12,10 @@ Design
   heard, so the model knows what was really said.
 * Security: until the PIN is verified, the ``home`` tool is rejected in code
   (it does not depend on the model following its instructions).
+* Outbound calls (placed for Home Assistant to deliver a notice) start by
+  reading the notice. Questions go to a read-only ``query`` agent; changes need
+  a PIN in the ``Management`` profile (the global PIN or the personal PIN of the
+  person called) and are impossible in ``QueryOnly``.
 """
 
 from __future__ import annotations
@@ -35,13 +39,17 @@ from .audiosocket import (
     pack_frame,
     read_frame,
 )
-from .config import Config
+from .config import PROFILE_MANAGE, PROFILE_QUERY, Config, key_name
 from .g711 import slin_to_ulaw, ulaw_to_slin
+from .outbound import OutboundCall
 
 log = logging.getLogger(__name__)
 
 READY_TIMEOUT_S = 10.0
 FLUSH_GRACE_S = 0.6
+# A confirmation key that is also a digit, in a call where a PIN can be typed,
+# counts only if no other key follows within this time.
+CONFIRM_KEY_WAIT_S = 2.0
 
 # 20 ms of digital silence. Asterisk's AudioSocket application hangs up if it
 # sees no activity (from the channel or from the server) for 2000 ms, and some
@@ -75,17 +83,61 @@ class _Home(Protocol):
     async def ask(self, text: str) -> dict[str, Any]: ...
 
 
-def build_tools(cfg: Config) -> list[dict[str, Any]]:
+_HOME_INBOUND = (
+    "Control or query the home through Home Assistant. Pass ONE "
+    "request in natural language, for example 'turn on the living "
+    "room light' or 'is the garage door open?'. Returns Home "
+    "Assistant's response."
+)
+_HOME_QUERY = (
+    "Ask Home Assistant about the state of the home (read-only: it cannot "
+    "change anything). Pass ONE question in natural language, for example "
+    "'is the garage door open?'. Returns Home Assistant's response."
+)
+_HOME_MANAGE = (
+    "Query the home through Home Assistant and, once the PIN is verified, "
+    "control it. Pass ONE request in natural language, for example 'is the "
+    "garage door open?' or 'close the garage door'. Returns Home "
+    "Assistant's response."
+)
+
+
+def accepted_pins(cfg: Config, call: OutboundCall | None) -> tuple[tuple[str, str], ...]:
+    """PINs that can unlock changes in this call, as (name, digits).
+
+    Incoming calls accept every PIN. Outbound ``Management`` calls accept the
+    global PIN and the personal PIN of the person called (matched by name,
+    case-insensitive). ``QueryOnly`` calls accept none.
+    """
+    if call is None:
+        return cfg.pin_entries
+    if call.profile != PROFILE_MANAGE:
+        return ()
+    person = call.person.strip().lower()
+    return tuple((n, p) for n, p in cfg.pin_entries if not n or (person and n.lower() == person))
+
+
+def pin_state(cfg: Config, call: OutboundCall | None) -> str:
+    """"open" (no PIN needed to act), "pin" (a PIN unlocks) or "locked" (no changes)."""
+    if call is not None and call.profile == PROFILE_QUERY:
+        return "locked"
+    if not cfg.pin_entries:
+        return "open"
+    return "pin" if accepted_pins(cfg, call) else "locked"
+
+
+def build_tools(cfg: Config, call: OutboundCall | None = None) -> list[dict[str, Any]]:
+    """Tools for an incoming call (``call`` None) or an outbound call."""
+    state = pin_state(cfg, call)
+    if call is None:
+        description = _HOME_INBOUND
+    else:
+        description = _HOME_QUERY if state == "locked" else _HOME_MANAGE
     tools: list[dict[str, Any]] = [
         {
             "type": "function",
             "name": "home",
-            "description": (
-                "Control or query the home through Home Assistant. Pass ONE "
-                "request in natural language, for example 'turn on the living "
-                "room light' or 'is the garage door open?'. Returns Home "
-                "Assistant's response."
-            ),
+            "description": description,
             "parameters": {
                 "type": "object",
                 "properties": {"request": {"type": "string"}},
@@ -102,7 +154,19 @@ def build_tools(cfg: Config) -> list[dict[str, Any]]:
             "parameters": {"type": "object", "properties": {}},
         },
     ]
-    if cfg.pin:
+    if call is not None and call.confirm != "dtmf":
+        tools.append(
+            {
+                "type": "function",
+                "name": "confirm_notice",
+                "description": (
+                    "Record that the person has confirmed they received the "
+                    "notice. Call it once, as the call's rules describe."
+                ),
+                "parameters": {"type": "object", "properties": {}},
+            }
+        )
+    if state == "pin":
         tools.insert(
             0,
             {
@@ -124,7 +188,7 @@ def build_tools(cfg: Config) -> list[dict[str, Any]]:
     return tools
 
 
-def build_session_update(cfg: Config) -> dict[str, Any]:
+def build_session_update(cfg: Config, call: OutboundCall | None = None) -> dict[str, Any]:
     if cfg.vad == "semantic_vad":
         turn_detection: dict[str, Any] = {
             "type": "semantic_vad",
@@ -157,12 +221,12 @@ def build_session_update(cfg: Config) -> dict[str, Any]:
         "session": {
             "type": "realtime",
             "output_modalities": ["audio"],
-            "instructions": cfg.instructions,
+            "instructions": cfg.instructions_for(call, pin_state(cfg, call)),
             "audio": {
                 "input": audio_in,
                 "output": {"format": {"type": "audio/pcmu"}, "voice": cfg.voice},
             },
-            "tools": build_tools(cfg),
+            "tools": build_tools(cfg, call),
             "tool_choice": "auto",
         },
     }
@@ -197,6 +261,8 @@ class CallSession:
         ws: _WebSocket,
         home: _Home,
         frame_seconds: float = FRAME_MS / 1000,
+        outbound: OutboundCall | None = None,
+        query_home: _Home | None = None,
     ) -> None:
         self.cfg = cfg
         self.call_id = call_id
@@ -204,7 +270,12 @@ class CallSession:
         self.writer = writer
         self.ws = ws
         self.home = home
+        self.query_home = query_home
         self.frame_seconds = frame_seconds
+        self.outbound = outbound
+        self.profile = outbound.profile if outbound else None
+        self._pins = accepted_pins(cfg, outbound)
+        self._pin_state = pin_state(cfg, outbound)
 
         # Audio queue towards Asterisk: (item_id, 20 ms frame).
         self._out: collections.deque[tuple[str, bytes]] = collections.deque()
@@ -219,13 +290,27 @@ class CallSession:
         self._seen_calls: set[str] = set()
         self._tool_tasks: set[asyncio.Task] = set()
 
-        self._authed = not cfg.pin
+        # "Authed" means allowed to CHANGE things: never when "locked".
+        self._authed = self._pin_state == "open"
         self._pin_attempts = 0
         self._dtmf = ""
+        self._key_timer: asyncio.Task | None = None
+
+        # Outcome, reported to Home Assistant when the call ends.
+        self.connected = False  # the OpenAI session was ready (audio flowed)
+        self.confirmed = False  # the person confirmed the notice
+        self.confirmed_by: str | None = None  # "implicit", "voice" or "dtmf"
+        self.pin_person: str | None = None  # who verified ("" = global PIN)
 
     # ------------------------------------------------------------------ run
     async def run(self) -> None:
-        await self._send(build_session_update(self.cfg))
+        if self.profile == PROFILE_MANAGE and self._pin_state == "locked":
+            log.warning(
+                "[%s] Management call without a global PIN or a personal PIN for %r: "
+                "changes are not possible in this call",
+                self.call_id, self.outbound.person if self.outbound else "",
+            )
+        await self._send(build_session_update(self.cfg, self.outbound))
         workers = {
             "asterisk": asyncio.create_task(self._from_asterisk()),
             "openai": asyncio.create_task(self._from_openai()),
@@ -312,6 +397,7 @@ class CallSession:
         if kind == "session.updated":
             if not self._ready.is_set():
                 self._ready.set()
+                self.connected = True
                 await self._greet()
         elif kind == "input_audio_buffer.speech_started":
             await self._interrupt()
@@ -336,10 +422,35 @@ class CallSession:
         # State the language explicitly: the model tends to answer in the
         # language of the instruction it is given, which would be English.
         lang = self.cfg.language_name
-        if self.cfg.pin:
-            hint = f"Greet the caller in {lang}, in one short sentence, and ask for the security PIN."
+        call = self.outbound
+        if call is not None:
+            name = call.assistant_name or self.cfg.assistant_name
+            key = key_name(call.confirm_key)
+            extra = f' Also tell them: "{call.confirm_text}"' if call.confirm_text else ""
+            ask = {
+                "implicit": "Then ask whether they need anything else.",
+                "voice": "Then ask them explicitly to confirm that they have received it." + extra,
+                "dtmf": f"Then ask them to press the {key} key to confirm that they have received it." + extra,
+                "voice_or_dtmf": (
+                    "Then ask them to confirm that they have received it, by saying so "
+                    f"or by pressing the {key} key." + extra
+                ),
+            }[call.confirm]
+            hint = (
+                f"You placed this call to deliver a notice. Speak {lang}. Introduce "
+                f"yourself in a few words as {name}, then read this notice clearly: "
+                f"\"{call.message}\". {ask}"
+            )
+        elif self._pin_state == "pin":
+            hint = (
+                f"Greet the caller in {lang}, in one short sentence, introducing yourself "
+                f"as {self.cfg.assistant_name}, and ask for the security PIN."
+            )
         else:
-            hint = f"Greet the caller in {lang}, in one short sentence, and ask how you can help."
+            hint = (
+                f"Greet the caller in {lang}, in one short sentence, introducing yourself "
+                f"as {self.cfg.assistant_name}, and ask how you can help."
+            )
         await self._send({"type": "response.create", "response": {"instructions": hint}})
 
     async def _on_response_done(self, response: dict[str, Any]) -> None:
@@ -452,33 +563,76 @@ class CallSession:
         if name == "hang_up":
             self._hangup_pending = True
             return {"ok": True}
+        if name == "confirm_notice" and self.outbound is not None and self.outbound.confirm != "dtmf":
+            self._confirm("implicit" if self.outbound.confirm == "implicit" else "voice")
+            return {"ok": True, "message": "Confirmation recorded."}
         if name == "home":
-            if not self._authed:
-                return {"ok": False, "error": "PIN not verified. Ask for the PIN before continuing."}
             request = str(args.get("request", "")).strip()
             if not request:
                 return {"ok": False, "error": "The request is missing."}
-            log.info("[%s] home: %s", self.call_id, request)
-            try:
-                return {"ok": True, **await self.home.ask(request)}
-            except Exception as err:  # noqa: BLE001 - report it to the model
-                log.warning("[%s] failed to talk to Home Assistant: %r", self.call_id, err)
-                return {"ok": False, "error": "Could not reach Home Assistant."}
+            return await self._home_request(request)
         return {"ok": False, "error": f"Unknown tool: {name}"}
 
+    async def _home_request(self, request: str) -> dict[str, Any]:
+        note = ""
+        if self._authed:
+            agent, kind = self.home, "home"
+        elif self.profile is None:
+            return {"ok": False, "error": "PIN not verified. Ask for the PIN before continuing."}
+        elif self.query_home is None:
+            return {
+                "ok": False,
+                "error": "Questions about the home are not available in this call.",
+            }
+        else:
+            # Outbound call without PIN: read-only agent, whatever was asked.
+            agent, kind = self.query_home, "query"
+            if self._pin_state == "locked":
+                note = "Read-only call: nothing can be changed, there is no PIN."
+            else:
+                note = "Read-only answer: to change anything the PIN must be verified first."
+        log.info("[%s] %s: %s", self.call_id, kind, request)
+        try:
+            result = {"ok": True, **await agent.ask(request)}
+        except Exception as err:  # noqa: BLE001 - report it to the model
+            log.warning("[%s] failed to talk to Home Assistant: %r", self.call_id, err)
+            return {"ok": False, "error": "Could not reach Home Assistant."}
+        if note:
+            result["note"] = note
+        return result
+
     # --------------------------------------------------------------- PIN
+    def _match_pin(self, digits: str, suffix: bool = False) -> str | None:
+        """Name of the PIN that matches ("" for the global one), or None."""
+        found = None
+        for name, pin in self._pins:
+            candidate = digits[-len(pin):] if suffix else digits
+            # Compare against every PIN (no early exit) to keep timing uniform.
+            if candidate and hmac.compare_digest(candidate, pin) and found is None:
+                found = name
+        return found
+
+    def _pin_verified(self, name: str, how: str) -> None:
+        self._authed = True
+        self.pin_person = name
+        log.info("[%s] PIN verified%s%s", self.call_id, how, f" ({name})" if name else "")
+
     def _check_pin(self, candidate: str) -> dict[str, Any]:
+        if self._pin_state == "locked":
+            return {"ok": False, "error": "There is no PIN in this call: nothing can be changed."}
         digits = _extract_digits(candidate)
-        log.debug(
-            "[%s] PIN candidate: %d digits (expected %d), %d matching positions",
-            self.call_id, len(digits), len(self.cfg.pin),
-            sum(a == b for a, b in zip(digits, self.cfg.pin)),
-        )
+        if log.isEnabledFor(logging.DEBUG):
+            for _, pin in self._pins:
+                log.debug(
+                    "[%s] PIN candidate: %d digits (expected %d), %d matching positions",
+                    self.call_id, len(digits), len(pin),
+                    sum(a == b for a, b in zip(digits, pin)),
+                )
         if self._authed:
             return {"ok": True, "message": "The PIN was already verified."}
-        if digits and hmac.compare_digest(digits, self.cfg.pin):
-            self._authed = True
-            log.info("[%s] PIN verified", self.call_id)
+        name = self._match_pin(digits)
+        if name is not None:
+            self._pin_verified(name, "")
             return {"ok": True, "message": "PIN correct."}
         return self._pin_failed()
 
@@ -495,16 +649,67 @@ class CallSession:
             }
         return {"ok": False, "error": "Wrong PIN. Ask for it again."}
 
+    # ------------------------------------------------------- confirmation
+    def _confirm(self, how: str) -> bool:
+        """Record the confirmation of the notice; False if it was already confirmed."""
+        if self.confirmed:
+            return False
+        self.confirmed = True
+        self.confirmed_by = how
+        log.info("[%s] notice confirmed (%s)", self.call_id, how)
+        return True
+
+    async def _confirm_by_key(self) -> None:
+        if self._confirm("dtmf"):
+            key = key_name(self.outbound.confirm_key) if self.outbound else ""
+            await self._system_note(
+                f"The person pressed the {key} key: the notice is confirmed. "
+                "Acknowledge it briefly and ask whether they need anything else."
+            )
+
+    async def _confirm_key_after_wait(self, key: str) -> None:
+        await asyncio.sleep(CONFIRM_KEY_WAIT_S)
+        self._key_timer = None
+        if self._dtmf == key:  # nothing else was typed: it was the confirmation
+            self._dtmf = ""
+            await self._confirm_by_key()
+
+    def _cancel_key_timer(self) -> None:
+        if self._key_timer is not None:
+            self._key_timer.cancel()
+            self._key_timer = None
+
+    # --------------------------------------------------------------- keypad
     async def _on_dtmf(self, digit: str) -> None:
-        """The PIN can also be typed on the phone keypad (more reliable than speaking it)."""
-        if self._authed or not self.cfg.pin or not digit:
+        """Keys: the confirmation key (outbound calls) and the PIN (more reliable than speaking it)."""
+        if not digit:
+            return
+        self._cancel_key_timer()
+        call = self.outbound
+        pin_entry = self._pin_state == "pin" and not self._authed
+        if (
+            call is not None
+            and call.confirm in ("dtmf", "voice_or_dtmf")
+            and not self.confirmed
+            and digit == call.confirm_key
+        ):
+            if not pin_entry or (not digit.isdigit() and not self._dtmf):
+                await self._confirm_by_key()
+                return
+            if digit.isdigit() and not self._dtmf:
+                # It may be the confirmation or the first digit of a PIN.
+                self._key_timer = asyncio.create_task(self._confirm_key_after_wait(digit))
+                self._tool_tasks.add(self._key_timer)
+                self._key_timer.add_done_callback(self._tool_tasks.discard)
+        if not pin_entry:
             return
         if digit.isdigit():
             self._dtmf = (self._dtmf + digit)[-16:]
-            if hmac.compare_digest(self._dtmf[-len(self.cfg.pin):], self.cfg.pin):
-                self._authed = True
+            name = self._match_pin(self._dtmf, suffix=True)
+            if name is not None:
+                self._cancel_key_timer()
                 self._dtmf = ""
-                log.info("[%s] PIN verified by keypad", self.call_id)
+                self._pin_verified(name, " by keypad")
                 await self._system_note(
                     "The caller typed the correct PIN on the keypad. Confirm it and ask how you can help."
                 )

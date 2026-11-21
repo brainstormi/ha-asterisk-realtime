@@ -15,6 +15,7 @@ Phone ──► SIP trunk ──► Asterisk ──AudioSocket (TCP)──► th
 * **Real barge-in:** the assistant's audio waits in a local queue that is emptied the instant the caller speaks, and the model is told what the caller actually heard (`conversation.item.truncate`).
 * **Security enforced in code:** with the PIN enabled, the tool that touches your home is rejected until the PIN is verified (spoken or typed on the keypad).
 * **The model never gets a Home Assistant token.** It sends natural-language requests to a conversation agent, which only acts on the entities **exposed to Assist**.
+* **Outbound notice calls:** Home Assistant can have the assistant call a phone, read a notice and answer questions, with `QueryOnly` / `Management` profiles, per-call confirmation and a result event (`no_answer`, `answered`, `confirmed`, `failed`). See *Outbound calls* in DOCS.md.
 
 ## Why AudioSocket and not SIP or WebRTC directly?
 
@@ -111,7 +112,7 @@ The model follows this to a degree, and the result depends on the model and the 
 The log should show:
 
 ```
-Asterisk Realtime Bridge 0.2.6 listening on 127.0.0.1:9092 (model gpt-realtime-2.1, PIN enabled)
+Asterisk Realtime Bridge 0.3.0 listening on 127.0.0.1:9092 (model gpt-realtime-2.1, PIN enabled)
 ```
 
 The image is built on your own machine from the `Dockerfile`, with no external registry involved. Reinstalling on a clean system means repeating the two steps above.
@@ -227,7 +228,7 @@ The tests use simulated Asterisk, OpenAI and Home Assistant endpoints and need n
 ## Status and limitations
 
 * Early release. The logic is covered by unit tests with simulated endpoints; field reports are welcome.
-* Calls are all handled the same way: there is no per-call initial message (for example for outbound alert calls).
+* There is no local fallback yet when OpenAI is unavailable: an outbound call then ends with `result: failed`, so the calling automation can fall back to another channel.
 * GPT-Live is not supported.
 
 ## License

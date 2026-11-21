@@ -6,6 +6,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # Default prompt template. It is also pre-filled in the add-on options, so it can
 # be edited there; an empty option falls back to this built-in version.
@@ -44,6 +45,93 @@ PIN_RULES = (
     "- If the PIN is wrong, say so and ask again. Never reveal or hint at the PIN."
 )
 
+# Outbound calls: the bridge placed the call to deliver a notice. Their rules
+# replace {pin_rules} and are appended after the prompt, so that they are there
+# with any custom prompt.
+PROFILE_QUERY = "QueryOnly"
+PROFILE_MANAGE = "Management"
+PROFILE_INBOUND = "InboundCall"  # only used in events: incoming calls
+PROFILES = (PROFILE_QUERY, PROFILE_MANAGE)
+
+CONFIRM_MODES = ("implicit", "voice", "dtmf", "voice_or_dtmf")
+CONFIRM_KEYS = "0123456789*#"
+
+_KEY_NAMES = {"#": "hash (#)", "*": "star (*)"}
+
+
+def key_name(key: str) -> str:
+    return _KEY_NAMES.get(key, key)
+
+
+def outbound_rules(
+    profile: str,
+    *,
+    pins: str,
+    confirm: str = "implicit",
+    confirm_key: str = "1",
+    confirm_text: str = "",
+) -> str:
+    """Rules for an outbound call.
+
+    ``pins`` is "open" (no PIN configured at all: anything goes), "pin" (a PIN
+    can unlock changes) or "locked" (no PIN applies to this call).
+    """
+    rules = [
+        "- This is an OUTBOUND call: you called this person to deliver a notice. "
+        "The person who answers may not be who was expected.",
+        "- If you hear a voicemail greeting or nobody responds, read the notice "
+        "once and call the hang_up tool.",
+    ]
+    ask_also = f' When you ask, also tell them: "{confirm_text}"' if confirm_text else ""
+    key = key_name(confirm_key)
+    if confirm == "implicit":
+        rules.append(
+            "- Do not ask for an explicit confirmation. As soon as the person shows "
+            "that they heard the notice (they reply, ask something, say ok or "
+            "goodbye), call the confirm_notice tool once. A voicemail greeting or "
+            "silence is not a confirmation."
+        )
+    elif confirm == "voice":
+        rules.append(
+            "- After the notice, ask them explicitly to confirm that they have "
+            f"received it.{ask_also} Only a clear yes counts: then call the "
+            "confirm_notice tool once. A question, a doubt or a voicemail is not a "
+            "confirmation."
+        )
+    elif confirm == "dtmf":
+        rules.append(
+            f"- After the notice, ask them to press the {key} key on the phone "
+            f"keypad to confirm that they have received it.{ask_also} Only the key "
+            "counts, not words: the system detects it and tells you."
+        )
+    else:  # voice_or_dtmf
+        rules.append(
+            "- After the notice, ask them to confirm that they have received it, "
+            f"by saying so or by pressing the {key} key.{ask_also} If they confirm "
+            "with a clear yes, call the confirm_notice tool once; if they press the "
+            "key, the system tells you. A question, a doubt or a voicemail is not a "
+            "confirmation."
+        )
+    if profile == PROFILE_MANAGE and pins == "open":
+        rules.append("- The person can ask questions and request changes with the home tool.")
+    elif profile == PROFILE_MANAGE and pins == "pin":
+        rules.append(
+            "- Questions about the state of the home can be answered right away "
+            "with the home tool.\n"
+            "- To CHANGE anything (turn on or off, open, close, arm, disarm...) the "
+            "person must first verify their PIN with the verify_pin tool. Ask for it "
+            "only when they want to change something. Never reveal or hint at the PIN."
+        )
+    else:  # QueryOnly, or Management without a PIN that applies to this call
+        rules.append(
+            "- In this call you can ONLY answer questions about the state of the "
+            "home with the home tool. You cannot change anything and there is no PIN "
+            "or any other way to unlock changes. If they ask to change something, "
+            "say that it cannot be done from this call."
+        )
+    return "\n".join(rules)
+
+
 _LANGUAGE_NAMES = {
     "ar": "Arabic", "ca": "Catalan", "cs": "Czech", "da": "Danish", "de": "German",
     "el": "Greek", "en": "English", "es": "Spanish", "eu": "Basque", "fi": "Finnish",
@@ -68,6 +156,7 @@ def render_prompt(
     language: str,
     accent: str,
     pin_enabled: bool,
+    pin_rules: str | None = None,
 ) -> str:
     """Fill the placeholders of a prompt template.
 
@@ -81,7 +170,7 @@ def render_prompt(
         "language_name": language_name(language),
     }
     blocks = {
-        "pin_rules": PIN_RULES if pin_enabled else "",
+        "pin_rules": pin_rules if pin_rules is not None else (PIN_RULES if pin_enabled else ""),
         "accent_line": f"Accent and dialect: {accent}" if accent else "",
     }
     lines: list[str] = []
@@ -119,10 +208,15 @@ class Config:
     extra_instructions: str = ""
     pin_enabled: bool = True
     pin: str = ""
+    # Personal PINs: (name, digits). Any configured PIN (global or personal) is
+    # accepted; the name only records who verified.
+    pins: tuple[tuple[str, str], ...] = ()
     max_pin_attempts: int = 3
     max_call_seconds: int = 300
     conversation_agent: str = "conversation.home_assistant"
     fallback_agent: str = ""
+    # Agent for read-only questions in outbound calls (should have no control).
+    query_agent: str = ""
     vad: str = "server_vad"
     vad_threshold: float = 0.5
     vad_silence_ms: int = 500
@@ -145,14 +239,40 @@ class Config:
         return language_name(self.language)
 
     @property
+    def pin_entries(self) -> tuple[tuple[str, str], ...]:
+        """Every accepted PIN as (name, digits); the global PIN has an empty name."""
+        entries = list(self.pins)
+        if self.pin:
+            entries.insert(0, ("", self.pin))
+        return tuple(entries)
+
+    @property
     def instructions(self) -> str:
+        return self.instructions_for()
+
+    def instructions_for(self, call: Any = None, pins: str = "open") -> str:
+        """Instructions for an incoming call (``call`` None) or an outbound call.
+
+        ``call`` is an ``OutboundCall``; ``pins`` is described in ``outbound_rules``.
+        """
+        name = (getattr(call, "assistant_name", "") or self.assistant_name) if call else self.assistant_name
         text = render_prompt(
             self.prompt.strip() or DEFAULT_PROMPT,
-            assistant_name=self.assistant_name,
+            assistant_name=name,
             language=self.language,
             accent=self.accent,
-            pin_enabled=bool(self.pin),
+            pin_enabled=bool(self.pin_entries),
+            pin_rules="" if call is not None else None,
         )
+        if call is not None:
+            rules = outbound_rules(
+                call.profile,
+                pins=pins,
+                confirm=call.confirm,
+                confirm_key=call.confirm_key,
+                confirm_text=call.confirm_text,
+            )
+            text += "\nThis call (these rules take precedence):\n" + rules + "\n"
         if self.extra_instructions.strip():
             text += "\nAdditional instructions:\n" + self.extra_instructions.strip() + "\n"
         return text
@@ -164,6 +284,29 @@ def _as_bool(value: object, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in _TRUE
+
+
+def _personal_pins(value: object) -> tuple[tuple[str, str], ...]:
+    if not value:
+        return ()
+    if not isinstance(value, list):
+        raise ConfigError("pins must be a list of {name, pin} entries.")
+    entries: list[tuple[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ConfigError("pins must be a list of {name, pin} entries.")
+        name = str(item.get("name") or "").strip()
+        digits = str(item.get("pin") or "").strip()
+        if not name:
+            raise ConfigError("Every personal PIN needs a name.")
+        if not digits.isdigit():
+            raise ConfigError(f"The PIN of {name!r} must contain digits only.")
+        if any(n.lower() == name.lower() for n, _ in entries):
+            raise ConfigError(f"Duplicate name in pins: {name!r}.")
+        if any(p == digits for _, p in entries):
+            raise ConfigError("Two people have the same personal PIN.")
+        entries.append((name, digits))
+    return tuple(entries)
 
 
 def load(path: str | None = None) -> Config:
@@ -186,14 +329,17 @@ def load(path: str | None = None) -> Config:
 
     pin_enabled = _as_bool(raw.get("pin_enabled"), True)
     pin = text("pin", "") if pin_enabled else ""
+    pins = _personal_pins(raw.get("pins")) if pin_enabled else ()
     if pin_enabled:
-        if not pin:
+        if not pin and not pins:
             raise ConfigError(
-                "pin_enabled is on but no PIN is configured. Set a PIN "
-                "(digits only) or turn pin_enabled off."
+                "pin_enabled is on but no PIN is configured. Set a global PIN, "
+                "personal PINs (pins), or turn pin_enabled off."
             )
-        if not pin.isdigit():
+        if pin and not pin.isdigit():
             raise ConfigError("The PIN must contain digits only.")
+        if pin and any(p == pin for _, p in pins):
+            raise ConfigError("A personal PIN is the same as the global PIN.")
 
     model = text("model", defaults.model)
     if model.lower().startswith("gpt-live"):
@@ -232,10 +378,12 @@ def load(path: str | None = None) -> Config:
         extra_instructions=text("extra_instructions", ""),
         pin_enabled=pin_enabled,
         pin=pin,
+        pins=pins,
         max_pin_attempts=int(raw.get("max_pin_attempts", defaults.max_pin_attempts)),
         max_call_seconds=int(raw.get("max_call_seconds", defaults.max_call_seconds)),
         conversation_agent=text("conversation_agent", defaults.conversation_agent),
         fallback_agent=text("fallback_agent", ""),
+        query_agent=text("query_agent", ""),
         vad=vad,
         vad_threshold=float(raw.get("vad_threshold", defaults.vad_threshold)),
         vad_silence_ms=int(raw.get("vad_silence_ms", defaults.vad_silence_ms)),

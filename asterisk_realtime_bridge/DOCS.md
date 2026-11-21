@@ -104,6 +104,7 @@ The model follows this to a degree, and the result depends on the model and the 
 ## PIN
 
 * `pin_enabled: true` (default) requires a PIN: set it in `pin` (digits only). The caller can **say it** or **type it on the phone keypad** (keypad entry depends on your Asterisk version and trunk forwarding DTMF over AudioSocket; if it does not work, speak the PIN).
+* `pins` adds **personal PINs** (a name and digits per person). Any configured PIN (global or personal) is accepted; the name only records who verified, in the log and in the call event. You can use the global PIN, personal PINs, or both.
 * `pin_enabled: false` disables it. Then any call that reaches the bridge can control your home, and your only barrier is your Asterisk dialplan (caller ID is a weak factor on its own). A warning is logged at startup.
 * The PIN and the OpenAI key are stored in the add-on configuration, visible to Home Assistant administrators.
 
@@ -148,6 +149,93 @@ Answer, say or type the PIN, ask for something like "turn on the living room lig
 
 Once you are happy with the test, send real calls to the same three lines (`Answer()`, `Set(UUID=${UUID()})`, `AudioSocket(${UUID},127.0.0.1:9092)`) from the context that handles your calls. Authorize callers in the dialplan first (for example, compare `${CALLERID(num)}` with an allowed number and hang up otherwise) and keep the PIN enabled as a second barrier. Calls originated by Asterisk can be connected the same way.
 
+## Outbound calls (notices)
+
+Home Assistant can have the bridge call a phone, read a notice and stay on the line for questions. It is meant to be reused by automations and by an alarm system: each call goes to **one** number, and the caller (your script or automation) decides retries, contact chains and fallbacks from the result it gets back.
+
+### How it works
+
+1. Home Assistant sends a command to the add-on's **standard input** with `hassio.addon_stdin`: a call id (a UUID it generates), the notice and a profile. No port is opened for this.
+2. Home Assistant asks Asterisk to dial the number (`channel originate`, for example through `hassio.addon_stdin` to the Asterisk add-on). When the phone is answered, the dialplan connects it to the bridge with `AudioSocket(<call id>,127.0.0.1:9092)`.
+3. The bridge recognises the call id, reads the notice and asks the person to confirm it.
+4. The bridge fires the event `asterisk_realtime_bridge_call` on the Home Assistant bus when the call is answered and when it ends.
+
+Command (the `input` of `hassio.addon_stdin`, addon `<slug>_asterisk_realtime_bridge`):
+
+```yaml
+action: outbound
+call_id: "0b6c3a52-7f0e-4d3c-9a51-2f5d8e9a1c07"  # a new UUID per attempt; also used in the dialplan
+message: "The alarm went off: motion in the garage at 03:12."
+profile: Management     # QueryOnly or Management
+person: Sonia           # optional; selects the personal PIN and is reported back
+timeout: 60             # seconds to answer before the result is no_answer
+confirm: voice_or_dtmf  # optional: implicit (default), voice, dtmf or voice_or_dtmf
+confirm_key: "1"        # optional, default 1 (0-9, * or #)
+confirm_text: "If you confirm, nobody else will be called."   # optional, said when asking
+assistant_name: "the alarm service of the house"              # optional, default: the add-on's
+```
+
+The bridge keeps no contacts and no call policy: who to call, with which profile, what counts as a confirmation and what to do with the result are decided by the caller (your script, automation or alarm) in every command.
+
+### Profiles
+
+| | Incoming call (`InboundCall`) | `QueryOnly` | `Management` |
+|---|---|---|---|
+| Starts with | greeting + PIN | the notice | the notice |
+| Questions about the home | after the PIN | yes, with `query_agent` | yes, with `query_agent` (full agent after the PIN) |
+| Changes | after the PIN | **never** (no PIN, not even a correct one) | after the PIN |
+| Accepted PINs | global and every personal PIN | none | the global PIN and the personal PIN of `person` |
+
+An incoming caller ID can be spoofed, so incoming calls need the PIN for everything. In an outbound call you chose the number, so questions are allowed; but someone else may answer, so changes still need the PIN (`Management`) or are impossible (`QueryOnly`). In a `Management` call only the global PIN and the personal PIN whose name matches `person` (case-insensitive) are accepted: someone else who answers that phone cannot use their own PIN. Without a global PIN and without a personal PIN for `person`, the call cannot change anything.
+
+### Confirmation
+
+| `confirm` | The assistant | What counts |
+|---|---|---|
+| `implicit` (default) | does not ask; it reads the conversation | the person reacts to the notice: replies, asks something, says ok or goodbye |
+| `voice` | asks explicitly (and says `confirm_text`) | a clear yes |
+| `dtmf` | asks to press `confirm_key` (and says `confirm_text`) | only the key |
+| `voice_or_dtmf` | asks for either | a clear yes or the key |
+
+A voicemail greeting, silence or hanging up without reacting is never a confirmation. In a `Management` call where a PIN can be typed, a digit confirmation key only counts if no other key follows within 2 seconds (otherwise the keys are taken as a PIN); `#` or `*` avoid that wait.
+
+`query_agent` must be a conversation agent **without control of Home Assistant** (for example a second OpenAI Conversation agent with "Control Home Assistant" off, whose instructions give it the states it may talk about). The bridge never sends unverified requests to `conversation_agent` or `fallback_agent`. Without `query_agent`, outbound calls only deliver the notice.
+
+### Results
+
+Event `asterisk_realtime_bridge_call`:
+
+| Field | Values |
+|---|---|
+| `call_id` | the UUID of the command |
+| `direction` | `outbound` (or `inbound` for incoming calls, only `stage: ended`) |
+| `stage` | `answered`, `ended` |
+| `result` (when `ended`) | `no_answer` (not answered within `timeout`), `answered`, `confirmed` (the person confirmed the notice), `failed` (invalid command, too many calls, or the assistant could not start, e.g. OpenAI unreachable) |
+| `profile`, `person` | as sent in the command (`InboundCall` for incoming calls) |
+| `confirmed_by` | when confirmed: `implicit`, `voice` or `dtmf` |
+| `duration`, `pin_verified`, `pin_person` | when `ended`; `pin_person` is the name of the personal PIN (empty for the global one) |
+
+A voicemail can answer the call: then the result is `answered`, not `confirmed`. Use `confirmed` when you need to know that a person got the notice.
+
+### Dialplan
+
+```
+; HA: channel originate Local/<number>@bridge-outbound extension <call_id>@bridge-notice
+[bridge-outbound]
+exten => _X.,1,NoOp(Notice call to ${EXTEN})
+ ; Some trunks require a specific caller ID: Set(CALLERID(all)=...)
+ same => n,Dial(PJSIP/${EXTEN}@<your-trunk-endpoint>,30)
+ same => n,Hangup()
+
+[bridge-notice]
+exten => _[0-9a-f].,1,NoOp(Notice ${EXTEN} answered)
+ same => n,Answer()
+ same => n,AudioSocket(${EXTEN},127.0.0.1:9092)
+ same => n,Hangup()
+```
+
+The ring time (30 s here) should be shorter than the command's `timeout`.
+
 ## Configuration
 
 | Option | Default | Purpose |
@@ -159,10 +247,12 @@ Once you are happy with the test, send real calls to the same three lines (`Answ
 | `assistant_name` | `Assistant` | How the assistant introduces itself |
 | `accent` | – | Optional accent/dialect hint (see above) |
 | `prompt` | template | Assistant prompt with placeholders (see above); empty = built-in |
-| `pin_enabled` / `pin` | `true` / – | Require a PIN and its value |
+| `pin_enabled` / `pin` | `true` / – | Require a PIN and the global PIN |
+| `pins` | – | Personal PINs (name and digits) |
 | `max_pin_attempts` | `3` | Failed PIN attempts before hanging up |
 | `conversation_agent` | `conversation.home_assistant` | Agent that executes requests |
 | `fallback_agent` | – | Agent used when the main one cannot handle a request |
+| `query_agent` | – | Read-only agent for questions in outbound calls |
 | `max_call_seconds` | `300` | Hard limit on call length (cost control) |
 | `max_concurrent_calls` | `1` | Simultaneous calls |
 | `vad`, `vad_threshold`, `vad_silence_ms` | `server_vad`, `0.5`, `500` | Turn detection |
@@ -197,5 +287,5 @@ Once you are happy with the test, send real calls to the same three lines (`Answ
 ## Status and limitations
 
 * Early release. The logic is covered by unit tests with simulated endpoints; field reports are welcome.
-* Calls are all handled the same way: there is no per-call initial message (for example for outbound alert calls).
+* There is no local fallback yet when OpenAI is unavailable: an outbound call then ends with `result: failed`, so the calling automation can fall back to a push notification or another channel.
 * GPT-Live is not supported.
