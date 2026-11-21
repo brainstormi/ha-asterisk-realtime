@@ -48,6 +48,19 @@ class HomeAssistant:
 
     async def _converse(self, agent_id: str, text: str) -> dict[str, Any]:
         payload = {"text": text, "language": self._language, "agent_id": agent_id}
+        data = await self._post("conversation/process", payload)
+        response = data.get("response") or {}
+        speech = ((response.get("speech") or {}).get("plain") or {}).get("speech")
+        return {
+            "type": response.get("response_type", "unknown"),
+            "response": speech or "",
+        }
+
+    async def fire_event(self, event_type: str, data: dict[str, Any]) -> None:
+        """Fire an event on the Home Assistant bus (call results for automations)."""
+        await self._post(f"events/{event_type}", data)
+
+    async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self._token}"}
         timeout = aiohttp.ClientTimeout(total=20)
         last_error: Exception | None = None
@@ -55,7 +68,7 @@ class HomeAssistant:
         for base in list(self._urls):
             try:
                 async with self._http.post(
-                    f"{base}/conversation/process",
+                    f"{base}/{path}",
                     json=payload,
                     headers=headers,
                     timeout=timeout,
@@ -69,10 +82,5 @@ class HomeAssistant:
             # Remember the URL that works for the following requests.
             self._urls.remove(base)
             self._urls.insert(0, base)
-            response = data.get("response") or {}
-            speech = ((response.get("speech") or {}).get("plain") or {}).get("speech")
-            return {
-                "type": response.get("response_type", "unknown"),
-                "response": speech or "",
-            }
+            return data if isinstance(data, dict) else {}
         raise ConnectionError(f"Could not reach Home Assistant: {last_error}")

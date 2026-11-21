@@ -25,7 +25,10 @@ configuration:
     description: If disabled, any call reaching the bridge can control the home (your Asterisk dialplan would be the only barrier).
   pin:
     name: Security PIN
-    description: Digits only. Can be spoken or typed on the phone keypad. Required when "Require PIN" is on.
+    description: Global PIN, digits only. Can be spoken or typed on the phone keypad. With "Require PIN" on, set this PIN, personal PINs, or both.
+  pins:
+    name: Personal PINs
+    description: One PIN per person (name and digits). Any configured PIN is accepted; the name records who verified and is sent to Home Assistant in the call event.
   max_pin_attempts:
     name: PIN attempts
     description: The call is hung up after this many failures.
@@ -41,6 +44,9 @@ configuration:
   fallback_agent:
     name: Fallback agent (optional)
     description: Used when the main agent does not understand the command, for example conversation.openai_conversation. Adds latency and cost.
+  query_agent:
+    name: Read-only agent for outbound calls (optional)
+    description: Answers questions in outbound calls before a PIN is verified (and always in the soloconsulta profile). Use an agent WITHOUT control of Home Assistant, for example an OpenAI agent with "Control Home Assistant" off. Empty = no questions in outbound calls.
   vad:
     name: Turn detection
     description: server_vad (silence based) or semantic_vad (meaning based).
