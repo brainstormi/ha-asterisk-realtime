@@ -14,16 +14,25 @@ class ClientConnectorError(Exception):
 
 
 fake_aiohttp.ClientConnectorError = ClientConnectorError
+fake_aiohttp.ClientResponseError = type("ClientResponseError", (Exception,), {})
 fake_aiohttp.ClientTimeout = lambda total=None: ("timeout", total)
 fake_aiohttp.ClientSession = object
 sys.modules["aiohttp"] = fake_aiohttp
 
-from app.ha import HomeAssistant  # noqa: E402
+from app.ha import HomeAssistant, HomeAssistantError  # noqa: E402
 
 
 class FakeResponse:
-    def __init__(self, data):
+    def __init__(self, data, status=200, text=""):
         self._data = data
+        self.status = status
+        self._text = text
+
+    async def text(self):
+        return self._text
+
+    async def read(self):
+        return self._data
 
     async def __aenter__(self):
         return self
@@ -104,6 +113,42 @@ class HomeAssistantTests(unittest.IsolatedAsyncioTestCase):
         ha = HomeAssistant(http, ("http://a",), "t", "x", "en")
         with self.assertRaises(ConnectionError):
             await ha.ask("x")
+
+
+class ErrorAndTTSTests(unittest.IsolatedAsyncioTestCase):
+    async def test_http_errors_never_carry_the_token(self):
+        class Http:
+            def request(self, method, url, json, headers, timeout):
+                return FakeResponse({}, status=500, text="Internal Server Error")
+
+        ha = HomeAssistant(Http(), ("http://a",), "SECRET-TOKEN", "agent", "es")
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await ha.ask("hola")
+        self.assertEqual(ctx.exception.status, 500)
+        self.assertNotIn("SECRET-TOKEN", repr(ctx.exception) + str(ctx.exception))
+
+    async def test_tts_retries_without_an_unsupported_language(self):
+        calls = []
+
+        class Http:
+            def request(self, method, url, json, headers, timeout):
+                calls.append((method, url, dict(json or {})))
+                if url.endswith("/tts_get_url"):
+                    if "language" in json:
+                        return FakeResponse({}, status=500, text="Language es is not supported")
+                    return FakeResponse({"path": "/api/tts_proxy/abc.wav"})
+                return FakeResponse(b"RIFF...")
+
+        ha = HomeAssistant(Http(), ("http://a",), "tok", "agent", "es")
+        audio = await ha.tts_audio("tts.piper", "Hola", "es", "es_ES-davefx-medium")
+        self.assertEqual(audio, b"RIFF...")
+        self.assertEqual(calls[0][2]["language"], "es")
+        self.assertNotIn("language", calls[1][2])
+        self.assertEqual(calls[1][2]["options"]["voice"], "es_ES-davefx-medium")
+        self.assertEqual(calls[1][2]["options"]["preferred_sample_rate"], 8000)
+        self.assertEqual(calls[2][:2], ("GET", "http://a/tts_proxy/abc.wav"))
+
+
 
 
 if __name__ == "__main__":

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+- **Security fix:** an HTTP error from Home Assistant was logged with aiohttp's full error text, which includes the request headers and so the add-on's Supervisor token. Errors are now reported as status and path only.
+- Fix: the fallback TTS failed when the engine does not accept the language code ("es" with Piper, which wants "es_ES"; Home Assistant answers 500). The request is retried with the engine's default language.
+
 ## 0.5.0
 - **Fallback when OpenAI is unavailable** (`fallback_tts`, for example `tts.piper`): outbound notices are read twice with Home Assistant's TTS and confirmed with a key; incoming calls hear that the assistant is not available. The notice audio is generated while the phone rings. Also used if OpenAI drops mid-call before the notice was confirmed. Events carry `fallback: true`.
 - **OpenAI check** every `openai_check_minutes` (default 15): opens and closes a Realtime session (no audio, no tokens) and publishes `binary_sensor.asterisk_realtime_bridge_openai` with the reason when it fails (for example `insufficient_quota`).
