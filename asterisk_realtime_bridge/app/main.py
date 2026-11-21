@@ -19,6 +19,7 @@ from .config import DEPRECATED_MODELS, PROFILE_INBOUND, Config, ConfigError, loa
 from .ha import HomeAssistant
 from .outbound import CommandError, OutboundCall, Registry, parse_command, read_commands
 from .session import CallSession, keepalive
+from .status import HomeStatus
 
 log = logging.getLogger("bridge")
 
@@ -37,13 +38,8 @@ class Bridge:
             cfg.language,
             cfg.fallback_agent,
         )
-        # Read-only agent for questions in outbound calls (no fallback: a
-        # fallback agent might be able to act).
-        self.query_home = (
-            HomeAssistant(http, cfg.ha_api_urls, cfg.ha_token, cfg.query_agent, cfg.language)
-            if cfg.query_agent
-            else None
-        )
+        # Read-only view of the home for outbound calls without a PIN.
+        self.status = HomeStatus(self.home, cfg.query_include, cfg.query_exclude)
         self.registry = Registry(on_expired=self._report_missed)
         self._active = 0
 
@@ -128,7 +124,7 @@ class Bridge:
                     await asyncio.gather(silence, return_exceptions=True)
                     session = CallSession(
                         self.cfg, call_id, reader, writer, ws, self.home,
-                        outbound=outbound, query_home=self.query_home,
+                        outbound=outbound, status=self.status,
                     )
                     await session.run()
             except Exception as err:  # noqa: BLE001
@@ -221,8 +217,9 @@ async def serve(cfg: Config) -> None:
         stdin = await _stdin_reader()
         if stdin is not None:
             commands = asyncio.create_task(read_commands(stdin, bridge.on_command))
-            log.info("Outbound calls: listening for commands from Home Assistant%s",
-                     "" if cfg.query_agent else " (no query_agent: questions disabled in outbound calls)")
+            log.info("Outbound calls: listening for commands from Home Assistant "
+                     "(read-only scope without PIN: %s%s)", bridge.status.scope,
+                     f"; excluding {cfg.query_exclude}" if cfg.query_exclude else "")
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):

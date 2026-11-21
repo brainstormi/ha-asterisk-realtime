@@ -16,9 +16,10 @@ Design
 * Security: until the PIN is verified, the ``home`` tool is rejected in code
   (it does not depend on the model following its instructions).
 * Outbound calls (placed for Home Assistant to deliver a notice) start by
-  reading the notice. Questions go to a read-only ``query`` agent; changes need
-  a PIN in the ``Management`` profile (the global PIN or the personal PIN of the
-  person called) and are impossible in ``QueryOnly``.
+  reading the notice. Questions are answered with ``home_status``, a read-only
+  list built by the bridge (``status.py``); changes need a PIN in the
+  ``Management`` profile (the global PIN or the personal PIN of the person
+  called) and are impossible in ``QueryOnly``.
 """
 
 from __future__ import annotations
@@ -88,23 +89,34 @@ class _Home(Protocol):
     async def ask(self, text: str) -> dict[str, Any]: ...
 
 
+class _Status(Protocol):
+    async def snapshot(self, search: str = "") -> dict[str, Any]: ...
+
+
 _HOME_INBOUND = (
     "Control or query the home through Home Assistant. Pass ONE "
     "request in natural language, for example 'turn on the living "
     "room light' or 'is the garage door open?'. Returns Home "
     "Assistant's response."
 )
-_HOME_QUERY = (
-    "Ask Home Assistant about the state of the home (read-only: it cannot "
-    "change anything). Pass ONE question in natural language, for example "
-    "'is the garage door open?'. Returns Home Assistant's response."
-)
 _HOME_MANAGE = (
-    "Query the home through Home Assistant and, once the PIN is verified, "
-    "control it. Pass ONE request in natural language, for example 'is the "
-    "garage door open?' or 'close the garage door'. Returns Home "
-    "Assistant's response."
+    "Change something in the home through Home Assistant (only after the PIN "
+    "is verified). Pass ONE request in natural language, for example 'close "
+    "the garage door'. For questions use home_status instead."
 )
+_STATUS_TOOL = {
+    "type": "function",
+    "name": "home_status",
+    "description": (
+        "Read-only: the current state of the home entities you may talk about, "
+        "with the current time. Optional search: one word to narrow the list "
+        "(for example 'garaje'). Call it before saying how anything is now."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"search": {"type": "string"}},
+    },
+}
 
 
 def accepted_pins(cfg: Config, call: OutboundCall | None) -> tuple[tuple[str, str], ...]:
@@ -134,21 +146,24 @@ def pin_state(cfg: Config, call: OutboundCall | None) -> str:
 def build_tools(cfg: Config, call: OutboundCall | None = None) -> list[dict[str, Any]]:
     """Tools for an incoming call (``call`` None) or an outbound call."""
     state = pin_state(cfg, call)
-    if call is None:
-        description = _HOME_INBOUND
-    else:
-        description = _HOME_QUERY if state == "locked" else _HOME_MANAGE
-    tools: list[dict[str, Any]] = [
-        {
-            "type": "function",
-            "name": "home",
-            "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": {"request": {"type": "string"}},
-                "required": ["request"],
-            },
-        },
+    tools: list[dict[str, Any]] = []
+    if call is not None:
+        tools.append(_STATUS_TOOL)
+    if call is None or state != "locked":
+        # The tool that can act is not even offered when nothing may change.
+        tools.append(
+            {
+                "type": "function",
+                "name": "home",
+                "description": _HOME_INBOUND if call is None else _HOME_MANAGE,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"request": {"type": "string"}},
+                    "required": ["request"],
+                },
+            }
+        )
+    tools.append(
         {
             "type": "function",
             "name": "hang_up",
@@ -157,8 +172,8 @@ def build_tools(cfg: Config, call: OutboundCall | None = None) -> list[dict[str,
                 "needs nothing else."
             ),
             "parameters": {"type": "object", "properties": {}},
-        },
-    ]
+        }
+    )
     if call is not None and call.confirm != "dtmf":
         tools.append(
             {
@@ -267,7 +282,7 @@ class CallSession:
         home: _Home,
         frame_seconds: float = FRAME_MS / 1000,
         outbound: OutboundCall | None = None,
-        query_home: _Home | None = None,
+        status: _Status | None = None,
     ) -> None:
         self.cfg = cfg
         self.call_id = call_id
@@ -275,7 +290,7 @@ class CallSession:
         self.writer = writer
         self.ws = ws
         self.home = home
-        self.query_home = query_home
+        self.status = status
         self.frame_seconds = frame_seconds
         self.outbound = outbound
         self.profile = outbound.profile if outbound else None
@@ -599,6 +614,8 @@ class CallSession:
         if name == "confirm_notice" and self.outbound is not None and self.outbound.confirm != "dtmf":
             self._confirm("implicit" if self.outbound.confirm == "implicit" else "voice")
             return {"ok": True, "message": "Confirmation recorded."}
+        if name == "home_status" and self.outbound is not None:
+            return await self._home_status(str(args.get("search") or "").strip())
         if name == "home":
             request = str(args.get("request", "")).strip()
             if not request:
@@ -606,33 +623,34 @@ class CallSession:
             return await self._home_request(request)
         return {"ok": False, "error": f"Unknown tool: {name}"}
 
+    async def _home_status(self, search: str) -> dict[str, Any]:
+        if self.status is None:
+            return {"ok": False, "error": "The state of the home is not available."}
+        log.info("[%s] status%s", self.call_id, f": {search}" if search else "")
+        try:
+            return {"ok": True, **await self.status.snapshot(search)}
+        except Exception as err:  # noqa: BLE001 - report it to the model
+            log.warning("[%s] failed to read the home state: %r", self.call_id, err)
+            return {"ok": False, "error": "Could not read the state of the home."}
+
     async def _home_request(self, request: str) -> dict[str, Any]:
-        note = ""
-        if self._authed:
-            agent, kind = self.home, "home"
-        elif self.profile is None:
-            return {"ok": False, "error": "PIN not verified. Ask for the PIN before continuing."}
-        elif self.query_home is None:
+        """The tool that can ACT: only with a verified PIN (or no PIN at all)."""
+        if not self._authed:
+            if self.profile is None:
+                return {"ok": False, "error": "PIN not verified. Ask for the PIN before continuing."}
+            if self._pin_state == "locked":
+                return {"ok": False, "error": "Nothing can be changed in this call."}
             return {
                 "ok": False,
-                "error": "Questions about the home are not available in this call.",
+                "error": "The PIN must be verified before changing anything. "
+                "For questions use home_status.",
             }
-        else:
-            # Outbound call without PIN: read-only agent, whatever was asked.
-            agent, kind = self.query_home, "query"
-            if self._pin_state == "locked":
-                note = "Read-only call: nothing can be changed, there is no PIN."
-            else:
-                note = "Read-only answer: to change anything the PIN must be verified first."
-        log.info("[%s] %s: %s", self.call_id, kind, request)
+        log.info("[%s] home: %s", self.call_id, request)
         try:
-            result = {"ok": True, **await agent.ask(request)}
+            return {"ok": True, **await self.home.ask(request)}
         except Exception as err:  # noqa: BLE001 - report it to the model
             log.warning("[%s] failed to talk to Home Assistant: %r", self.call_id, err)
             return {"ok": False, "error": "Could not reach Home Assistant."}
-        if note:
-            result["note"] = note
-        return result
 
     # --------------------------------------------------------------- PIN
     def _match_pin(self, digits: str, suffix: bool = False) -> str | None:

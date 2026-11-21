@@ -182,7 +182,7 @@ The bridge keeps no contacts and no call policy: who to call, with which profile
 | | Incoming call (`InboundCall`) | `QueryOnly` | `Management` |
 |---|---|---|---|
 | Starts with | greeting + PIN | the notice | the notice |
-| Questions about the home | after the PIN | yes, with `query_agent` | yes, with `query_agent` (full agent after the PIN) |
+| Questions about the home | after the PIN | yes, read-only (`home_status`) | yes, read-only (`home_status`) |
 | Changes | after the PIN | **never** (no PIN, not even a correct one) | after the PIN |
 | Accepted PINs | global and every personal PIN | none | the global PIN and the personal PIN of `person` |
 
@@ -199,7 +199,16 @@ An incoming caller ID can be spoofed, so incoming calls need the PIN for everyth
 
 A voicemail greeting, silence or hanging up without reacting is never a confirmation. In a `Management` call where a PIN can be typed, a digit confirmation key only counts if no other key follows within 2 seconds (otherwise the keys are taken as a PIN); `#` or `*` avoid that wait.
 
-`query_agent` must be a conversation agent **without control of Home Assistant** (for example a second OpenAI Conversation agent with "Control Home Assistant" off, whose instructions give it the states it may talk about). The bridge never sends unverified requests to `conversation_agent` or `fallback_agent`. Without `query_agent`, outbound calls only deliver the notice.
+### Questions without a PIN (read-only scope)
+
+Home Assistant has no read-only Assist: an agent that can see the exposed entities can also control them. So, for questions asked without a PIN, the bridge builds a read-only list itself and gives it to the assistant with the `home_status` tool (name, state, type and since when, plus the current time). The tool that can act (`home`) is not offered in `QueryOnly` and is rejected in `Management` until the PIN is verified. Requests without a PIN never reach `conversation_agent` or `fallback_agent`.
+
+What can be read is set **only in the add-on configuration** (never per call, so a call cannot widen it):
+
+* `query_include`: labels, comma separated, by name or id. **Empty = the same entities exposed to Assist** in Home Assistant (the scope you already control by voice).
+* `query_exclude`: labels, entity ids or device names to remove from that scope. A name that is both a label and a device excludes both.
+
+Labels on a device apply to its entities. Names are matched ignoring case and accents. Incoming calls and `Management` calls after the PIN are unchanged: the request goes to your conversation agent, which only sees what is exposed to Assist.
 
 ### Results
 
@@ -252,7 +261,7 @@ The ring time (30 s here) should be shorter than the command's `timeout`.
 | `max_pin_attempts` | `3` | Failed PIN attempts before hanging up |
 | `conversation_agent` | `conversation.home_assistant` | Agent that executes requests |
 | `fallback_agent` | – | Agent used when the main one cannot handle a request |
-| `query_agent` | – | Read-only agent for questions in outbound calls |
+| `query_include` / `query_exclude` | – / – | Read-only scope for outbound calls without a PIN (empty include = Assist scope) |
 | `max_call_seconds` | `300` | Hard limit on call length (cost control) |
 | `max_concurrent_calls` | `1` | Simultaneous calls |
 | `vad`, `vad_threshold`, `vad_silence_ms` | `server_vad`, `0.5`, `500` | Turn detection |

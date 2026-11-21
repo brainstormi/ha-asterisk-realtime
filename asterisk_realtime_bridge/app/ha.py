@@ -1,7 +1,8 @@
-"""Minimal Home Assistant client (REST API through the Supervisor proxy)."""
+"""Minimal Home Assistant client (REST and WebSocket APIs through the Supervisor proxy)."""
 
 from __future__ import annotations
 
+import itertools
 import logging
 from typing import Any
 
@@ -32,6 +33,7 @@ class HomeAssistant:
         self._agent_id = agent_id
         self._fallback_agent = fallback_agent
         self._language = language
+        self._ids = itertools.count(1)
 
     async def ask(self, text: str) -> dict[str, Any]:
         """Ask the main agent first; if it cannot handle the request and a
@@ -60,21 +62,64 @@ class HomeAssistant:
         """Fire an event on the Home Assistant bus (call results for automations)."""
         await self._post(f"events/{event_type}", data)
 
+    async def get(self, path: str) -> Any:
+        """GET a REST endpoint (for example ``states``)."""
+        return await self._request("GET", path)
+
+    async def render(self, template: str) -> str:
+        """Render a template in Home Assistant (its timezone, its functions)."""
+        return await self._request("POST", "template", {"template": template}, text=True)
+
+    async def ws(self, command: str, **kwargs: Any) -> Any:
+        """Run one WebSocket command (registries and exposure are only there)."""
+        last_error: Exception | None = None
+        for base in list(self._urls):
+            url = base.replace("http://", "ws://").replace("https://", "wss://")
+            url = url[: -len("/api")] + "/websocket" if url.endswith("/api") else url + "/websocket"
+            try:
+                async with self._http.ws_connect(url) as sock:
+                    hello = await sock.receive_json(timeout=10)
+                    if hello.get("type") == "auth_required":
+                        await sock.send_json({"type": "auth", "access_token": self._token})
+                        auth = await sock.receive_json(timeout=10)
+                        if auth.get("type") != "auth_ok":
+                            raise ConnectionError(f"Home Assistant rejected the token: {auth}")
+                    msg_id = next(self._ids)
+                    await sock.send_json({"id": msg_id, "type": command, **kwargs})
+                    while True:
+                        reply = await sock.receive_json(timeout=20)
+                        if reply.get("id") == msg_id and reply.get("type") == "result":
+                            break
+                if not reply.get("success"):
+                    raise RuntimeError(f"{command} failed: {reply.get('error')}")
+                return reply.get("result")
+            except aiohttp.ClientConnectorError as err:
+                last_error = err
+                continue
+        raise ConnectionError(f"Could not reach Home Assistant: {last_error}")
+
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        data = await self._request("POST", path, payload)
+        return data if isinstance(data, dict) else {}
+
+    async def _request(
+        self, method: str, path: str, payload: dict[str, Any] | None = None, text: bool = False
+    ) -> Any:
         headers = {"Authorization": f"Bearer {self._token}"}
         timeout = aiohttp.ClientTimeout(total=20)
         last_error: Exception | None = None
 
         for base in list(self._urls):
             try:
-                async with self._http.post(
+                async with self._http.request(
+                    method,
                     f"{base}/{path}",
                     json=payload,
                     headers=headers,
                     timeout=timeout,
                 ) as resp:
                     resp.raise_for_status()
-                    data = await resp.json()
+                    data = await (resp.text() if text else resp.json())
             except aiohttp.ClientConnectorError as err:
                 # No route to this URL: try the next one.
                 last_error = err
@@ -82,5 +127,5 @@ class HomeAssistant:
             # Remember the URL that works for the following requests.
             self._urls.remove(base)
             self._urls.insert(0, base)
-            return data if isinstance(data, dict) else {}
+            return data
         raise ConnectionError(f"Could not reach Home Assistant: {last_error}")

@@ -44,9 +44,12 @@ configuration:
   fallback_agent:
     name: Agente de respaldo (opcional)
     description: Se usa si el agente principal no entiende la orden, por ejemplo conversation.openai_conversation. Añade latencia y coste.
-  query_agent:
-    name: Agente de solo consulta para llamadas salientes (opcional)
-    description: Responde preguntas en las llamadas salientes antes de verificar un PIN (y siempre en el perfil QueryOnly). Usa un agente SIN control de Home Assistant, por ejemplo un agente de OpenAI con "Controlar Home Assistant" desactivado. Vacío = sin preguntas en llamadas salientes.
+  query_include:
+    name: Alcance de consulta sin PIN (etiquetas)
+    description: "Lo que una llamada saliente puede contar antes de verificar un PIN (siempre en QueryOnly). Etiquetas separadas por comas, por nombre o id. VACÍO = las mismas entidades expuestas a Assist en Home Assistant (lo que ya controlas por voz). Fuera de este alcance no se puede leer nada, y sin PIN nunca se puede cambiar nada."
+  query_exclude:
+    name: Excluir de ese alcance
+    description: "Etiquetas, ids de entidad (light.cocina) o nombres de dispositivo, separados por comas, que se quitan del alcance de consulta. Vacío = no se excluye nada."
   vad:
     name: Detección de turnos
     description: server_vad (por silencio) o semantic_vad (por significado).

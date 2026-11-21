@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+- **Read-only questions without a PIN, built into the bridge.** In outbound calls, the assistant answers questions with the new `home_status` tool: a read-only list of states (name, state, type, since when, current time) that the bridge builds from Home Assistant. It replaces the `query_agent` option, which is removed.
+- New `query_include` and `query_exclude` options set that scope, only in the add-on configuration. Empty include = the entities exposed to Assist.
+- In `QueryOnly` calls the tool that can act is no longer offered at all; in `Management` it is rejected until the PIN is verified.
+- The assistant is told to check the state before every answer and how to read it (local times, "year 2000 = never", door/motion states).
+
 ## 0.3.2
 - Fix: in an outbound call, if the person spoke over the greeting (for example "¿sí?" when answering), the assistant lost the notice and asked the person for it. The notice is now also part of the call's instructions, not only of the greeting.
 
