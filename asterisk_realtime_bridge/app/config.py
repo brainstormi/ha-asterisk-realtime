@@ -275,7 +275,7 @@ class Config:
             text += "\nThis call (these rules take precedence):\n" + rules + "\n"
             # The notice also lives here, not only in the greeting: if the person
             # talks over the greeting, the model must still know what to say.
-            text += f'\nThe notice to deliver in this call:\n"{call.message}"\n
+            text += f'\nThe notice to deliver in this call:\n"{call.message}"\n'
         if self.extra_instructions.strip():
             text += "\nAdditional instructions:\n" + self.extra_instructions.strip() + "\n"
         return text
