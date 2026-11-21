@@ -68,7 +68,46 @@ class HomeAssistant:
 
     async def render(self, template: str) -> str:
         """Render a template in Home Assistant (its timezone, its functions)."""
-        return await self._request("POST", "template", {"template": template}, text=True)
+        return await self._request("POST", "template", {"template": template}, kind="text")
+
+    async def set_state(self, entity_id: str, state: str, attributes: dict[str, Any]) -> None:
+        """Create or update an entity state (lives until Home Assistant restarts)."""
+        await self._request("POST", f"states/{entity_id}", {"state": state, "attributes": attributes})
+
+    async def tts_audio(
+        self, engine_id: str, message: str, language: str = "", voice: str = ""
+    ) -> bytes:
+        """Synthesize speech with a Home Assistant TTS engine, as an 8 kHz mono WAV.
+
+        Home Assistant converts the audio itself (preferred_* options), so the
+        bridge only has to strip the WAV header.
+        """
+        options: dict[str, Any] = {
+            "preferred_format": "wav",
+            "preferred_sample_rate": 8000,
+            "preferred_sample_channels": 1,
+            "preferred_sample_bytes": 2,
+        }
+        if voice:
+            options["voice"] = voice
+        payload: dict[str, Any] = {"engine_id": engine_id, "message": message, "cache": True,
+                                   "options": options}
+        if language:
+            payload["language"] = language
+        try:
+            data = await self._request("POST", "tts_get_url", payload)
+        except aiohttp.ClientResponseError as err:
+            if not language or err.status != 400:
+                raise
+            # The engine may not know this language code: use its default.
+            payload.pop("language")
+            data = await self._request("POST", "tts_get_url", payload)
+        path = str((data or {}).get("path") or "")
+        if path.startswith("/api/"):
+            path = path[len("/api/"):]
+        if not path:
+            raise RuntimeError(f"tts_get_url returned no path: {data}")
+        return await self._request("GET", path, kind="bytes")
 
     async def ws(self, command: str, **kwargs: Any) -> Any:
         """Run one WebSocket command (registries and exposure are only there)."""
@@ -103,7 +142,7 @@ class HomeAssistant:
         return data if isinstance(data, dict) else {}
 
     async def _request(
-        self, method: str, path: str, payload: dict[str, Any] | None = None, text: bool = False
+        self, method: str, path: str, payload: dict[str, Any] | None = None, kind: str = "json"
     ) -> Any:
         headers = {"Authorization": f"Bearer {self._token}"}
         timeout = aiohttp.ClientTimeout(total=20)
@@ -119,7 +158,12 @@ class HomeAssistant:
                     timeout=timeout,
                 ) as resp:
                     resp.raise_for_status()
-                    data = await (resp.text() if text else resp.json())
+                    if kind == "text":
+                        data = await resp.text()
+                    elif kind == "bytes":
+                        data = await resp.read()
+                    else:
+                        data = await resp.json()
             except aiohttp.ClientConnectorError as err:
                 # No route to this URL: try the next one.
                 last_error = err

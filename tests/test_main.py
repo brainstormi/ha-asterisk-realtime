@@ -59,7 +59,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.bridge.home.fire_event = fire_event
 
     async def asyncTearDown(self):
-        await self.bridge.registry.close()
+        await self.bridge.close()
 
     async def connect(self, call_id):
         reader = asyncio.StreamReader()
@@ -103,6 +103,46 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.12)
         data = self.events[0][1]
         self.assertEqual((data["call_id"], data["result"]), (CALL_ID, "no_answer"))
+
+    async def test_outbound_fallback_when_openai_is_down(self):
+        played = []
+
+        async def outbound(reader, writer, call):
+            played.append(call.call_id)
+            return True
+
+        async def report(ok, reason="", source="call"):
+            self.health.append((ok, reason))
+
+        self.health = []
+        self.bridge.fallback.engine = "tts.piper"
+        self.bridge.fallback.outbound = outbound
+        self.bridge.health.report = report
+        self.bridge.registry.add(OutboundCall(CALL_ID, "Alarm", "QueryOnly"))
+        await self.connect(CALL_ID)
+        await asyncio.sleep(0.01)
+        ended = self.events[-1][1]
+        self.assertEqual(played, [CALL_ID])
+        self.assertEqual((ended["result"], ended["confirmed_by"], ended["fallback"]),
+                         ("confirmed", "dtmf", True))
+        self.assertEqual(self.health[0][0], False)
+
+    async def test_inbound_fallback_message(self):
+        played = []
+
+        async def inbound(reader, writer):
+            played.append("inbound")
+
+        self.bridge.fallback.engine = "tts.piper"
+        self.bridge.fallback.inbound = inbound
+        await self.connect(str(uuid.uuid4()))
+        self.assertEqual(played, ["inbound"])
+        ended = self.events[-1][1]
+        self.assertEqual((ended["result"], ended["fallback"]), ("failed", True))
+
+    async def test_no_fallback_configured(self):
+        await self.connect(str(uuid.uuid4()))
+        self.assertNotIn("fallback", self.events[-1][1])
 
     def test_result_values(self):
         class S:
